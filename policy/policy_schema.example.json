@@ -1,0 +1,20 @@
+﻿{
+  "_comment": "Draft schema for the Week 3 policy engine. Not yet enforced — see docs/ROADMAP.md.",
+  "policy_name": "example-untrusted-script",
+  "network": {
+    "default": "deny",
+    "allow": [
+      { "host": "127.0.0.1", "port": 443 },
+      { "host": "pypi.org", "port": 443 }
+    ]
+  },
+  "filesystem": {
+    "default": "deny",
+    "allow_write": [
+      "/tmp/kernelguard-sandbox/"
+    ]
+  },
+  "process": {
+    "allow_child_exec": false
+  }
+}
