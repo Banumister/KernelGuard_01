@@ -21,6 +21,8 @@ def load_bpf_program():
     b = BPF(text=bpf_text)
     syscall_fn = b.get_syscall_fnname("execve")
     b.attach_kprobe(event=syscall_fn, fn_name="trace_execve")
+    b.attach_kprobe(event="tcp_v4_connect", fn_name="trace_connect_entry")
+    b.attach_kretprobe(event="tcp_v4_connect", fn_name="trace_connect_return")
     return b
 if __name__ == "__main__":
     if os.geteuid() != 0:
