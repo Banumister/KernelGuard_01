@@ -43,3 +43,13 @@ int trace_connect_return(struct pt_regs *ctx)
     currsock.delete(&pid);
     return 0;
 }
+/* --- vfs_write() tracking (Week 2) --- */
+
+struct write_data_t {
+    u32  pid;
+    char comm[TASK_COMM_LEN];
+    char filename[ARGSIZE];
+    u32  count;
+};
+
+BPF_PERF_OUTPUT(write_events);
