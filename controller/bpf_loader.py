@@ -28,7 +28,7 @@ def load_bpf_program():
 
     b.attach_kprobe(event="tcp_v4_connect", fn_name="trace_connect_entry")
     b.attach_kretprobe(event="tcp_v4_connect", fn_name="trace_connect_return")
-
+    b.attach_kprobe(event="vfs_write", fn_name="trace_vfs_write")
     return b
 
 
