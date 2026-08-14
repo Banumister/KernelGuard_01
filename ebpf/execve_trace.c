@@ -53,3 +53,16 @@ struct write_data_t {
 };
 
 BPF_PERF_OUTPUT(write_events);
+int trace_vfs_write(struct pt_regs *ctx, struct file *file, const char __user *buf, size_t count)
+{
+    struct write_data_t data = {};
+    struct dentry *de = file->f_path.dentry;
+
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.count = count;
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    bpf_probe_read_kernel_str(&data.filename, sizeof(data.filename), de->d_iname);
+
+    write_events.perf_submit(ctx, &data, sizeof(data));
+    return 0;
+}
