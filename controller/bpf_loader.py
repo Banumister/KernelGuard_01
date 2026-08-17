@@ -47,6 +47,12 @@ def print_tcp_event(cpu, data, size):
     print(f"PID={event.pid:<7} CONNECT {saddr} -> {daddr}:{dport}")
 
 
+def print_write_event(cpu, data, size):
+    event = b["write_events"].event(data)
+    print(f"PID={event.pid:<7} COMM={event.comm.decode('utf-8', 'replace'):<16} "
+          f"WRITE {event.count} bytes -> {event.filename.decode('utf-8', 'replace')}")
+
+
 if __name__ == "__main__":
     if os.geteuid() != 0:
         sys.exit("KernelGuard must be run as root (sudo) to load eBPF programs.")
@@ -54,8 +60,9 @@ if __name__ == "__main__":
     b = load_bpf_program()
     b["events"].open_perf_buffer(print_event)
     b["tcp_events"].open_perf_buffer(print_tcp_event)
+    b["write_events"].open_perf_buffer(print_write_event)
 
-    print("KernelGuard :: watching execve() and tcp_connect() syscalls. Ctrl-C to stop.")
+    print("KernelGuard :: watching execve(), tcp_connect(), and vfs_write() syscalls. Ctrl-C to stop.")
 
     try:
         while True:
