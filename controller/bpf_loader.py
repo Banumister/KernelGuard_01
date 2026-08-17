@@ -2,6 +2,7 @@ import os
 import sys
 import socket
 import struct
+import argparse
 
 try:
     from bcc import BPF
@@ -16,6 +17,15 @@ BPF_SOURCE_FILE = os.path.join(
     "ebpf",
     "execve_trace.c",
 )
+
+TARGET_PID = None
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="KernelGuard syscall tracer")
+    parser.add_argument("--pid", type=int, default=None,
+                         help="Only show events from this PID (default: show all processes)")
+    return parser.parse_args()
 
 
 def load_bpf_program():
@@ -34,6 +44,8 @@ def load_bpf_program():
 
 def print_event(cpu, data, size):
     event = b["events"].event(data)
+    if TARGET_PID is not None and event.pid != TARGET_PID:
+        return
     print(f"PID={event.pid:<7} PPID={event.ppid:<7} "
           f"COMM={event.comm.decode('utf-8', 'replace'):<16} "
           f"EXEC={event.filename.decode('utf-8', 'replace')}")
@@ -41,6 +53,8 @@ def print_event(cpu, data, size):
 
 def print_tcp_event(cpu, data, size):
     event = b["tcp_events"].event(data)
+    if TARGET_PID is not None and event.pid != TARGET_PID:
+        return
     saddr = socket.inet_ntoa(struct.pack("I", event.saddr))
     daddr = socket.inet_ntoa(struct.pack("I", event.daddr))
     dport = socket.ntohs(event.dport)
@@ -49,6 +63,8 @@ def print_tcp_event(cpu, data, size):
 
 def print_write_event(cpu, data, size):
     event = b["write_events"].event(data)
+    if TARGET_PID is not None and event.pid != TARGET_PID:
+        return
     print(f"PID={event.pid:<7} COMM={event.comm.decode('utf-8', 'replace'):<16} "
           f"WRITE {event.count} bytes -> {event.filename.decode('utf-8', 'replace')}")
 
@@ -56,6 +72,9 @@ def print_write_event(cpu, data, size):
 if __name__ == "__main__":
     if os.geteuid() != 0:
         sys.exit("KernelGuard must be run as root (sudo) to load eBPF programs.")
+
+    args = parse_args()
+    TARGET_PID = args.pid
 
     b = load_bpf_program()
     b["events"].open_perf_buffer(print_event)
