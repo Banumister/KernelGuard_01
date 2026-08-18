@@ -12,6 +12,11 @@ except ImportError:
         "Install the BCC toolchain first."
     )
 
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"
+))
+from policy_loader import load_policy, is_ip_allowed, is_path_allowed
+
 BPF_SOURCE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "ebpf",
@@ -19,12 +24,15 @@ BPF_SOURCE_FILE = os.path.join(
 )
 
 TARGET_PID = None
+POLICY = None
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="KernelGuard syscall tracer")
     parser.add_argument("--pid", type=int, default=None,
                          help="Only show events from this PID (default: show all processes)")
+    parser.add_argument("--policy", type=str, default=None,
+                         help="Path to a JSON policy file (see policy/policy_schema.json)")
     return parser.parse_args()
 
 
@@ -58,15 +66,24 @@ def print_tcp_event(cpu, data, size):
     saddr = socket.inet_ntoa(struct.pack("I", event.saddr))
     daddr = socket.inet_ntoa(struct.pack("I", event.daddr))
     dport = socket.ntohs(event.dport)
-    print(f"PID={event.pid:<7} CONNECT {saddr} -> {daddr}:{dport}")
+
+    status = ""
+    if POLICY is not None:
+        status = "[ALLOWED]" if is_ip_allowed(POLICY, daddr, dport) else "[BLOCKED - policy violation]"
+    print(f"PID={event.pid:<7} CONNECT {saddr} -> {daddr}:{dport} {status}")
 
 
 def print_write_event(cpu, data, size):
     event = b["write_events"].event(data)
     if TARGET_PID is not None and event.pid != TARGET_PID:
         return
+    filename = event.filename.decode('utf-8', 'replace')
+
+    status = ""
+    if POLICY is not None:
+        status = "[ALLOWED]" if is_path_allowed(POLICY, filename) else "[BLOCKED - policy violation]"
     print(f"PID={event.pid:<7} COMM={event.comm.decode('utf-8', 'replace'):<16} "
-          f"WRITE {event.count} bytes -> {event.filename.decode('utf-8', 'replace')}")
+          f"WRITE {event.count} bytes -> {filename} {status}")
 
 
 if __name__ == "__main__":
@@ -75,6 +92,8 @@ if __name__ == "__main__":
 
     args = parse_args()
     TARGET_PID = args.pid
+    if args.policy:
+        POLICY = load_policy(args.policy)
 
     b = load_bpf_program()
     b["events"].open_perf_buffer(print_event)
