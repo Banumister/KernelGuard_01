@@ -1,0 +1,16 @@
+{
+  "policy_name": "example-untrusted-script",
+  "network": {
+    "default": "deny",
+    "allow": [
+      { "host": "127.0.0.1", "port": 443 },
+      { "host": "8.8.8.8", "port": 53 }
+    ]
+  },
+  "filesystem": {
+    "default": "deny",
+    "allow_write": [
+      "/tmp/"
+    ]
+  }
+}
