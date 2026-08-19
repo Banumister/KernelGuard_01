@@ -1,3 +1,46 @@
+#include <linux/sched.h>
+
+#define ARGSIZE 128
+
+struct data_t {
+    u32  pid;
+    u32  ppid;
+    char comm[TASK_COMM_LEN];
+    char filename[ARGSIZE];
+};
+
+BPF_PERF_OUTPUT(events);
+
+/* --- Active blocking (Week 3) --- */
+
+BPF_HASH(blocked_pids, u32, u8);
+
+int trace_execve(struct pt_regs *ctx, const char __user *filename,
+                  const char __user *const __user *argv,
+                  const char __user *const __user *envp)
+{
+    struct data_t data = {};
+    struct task_struct *task;
+
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+
+    u8 *blocked = blocked_pids.lookup(&data.pid);
+    if (blocked != 0) {
+        bpf_send_signal(9);   // SIGKILL - stop the blocked process immediately
+        return 0;
+    }
+
+    task = (struct task_struct *)bpf_get_current_task();
+    data.ppid = task->real_parent->tgid;
+
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    bpf_probe_read_user_str(&data.filename, sizeof(data.filename), filename);
+
+    events.perf_submit(ctx, &data, sizeof(data));
+
+    return 0;
+}
+
 /* --- tcp_connect() tracking (Week 2) --- */
 
 struct connect_data_t {
@@ -13,6 +56,13 @@ BPF_PERF_OUTPUT(tcp_events);
 int trace_connect_entry(struct pt_regs *ctx, struct sock *sk)
 {
     u32 pid = bpf_get_current_pid_tgid() >> 32;
+
+    u8 *blocked = blocked_pids.lookup(&pid);
+    if (blocked != 0) {
+        bpf_send_signal(9);
+        return 0;
+    }
+
     currsock.update(&pid, &sk);
     return 0;
 }
@@ -24,12 +74,12 @@ int trace_connect_return(struct pt_regs *ctx)
 
     struct sock **skpp = currsock.lookup(&pid);
     if (skpp == 0) {
-        return 0;   // missed the entry probe for this PID
+        return 0;
     }
 
     if (ret != 0) {
         currsock.delete(&pid);
-        return 0;   // connect() failed, nothing to report
+        return 0;
     }
 
     struct sock *skp = *skpp;
@@ -43,6 +93,7 @@ int trace_connect_return(struct pt_regs *ctx)
     currsock.delete(&pid);
     return 0;
 }
+
 /* --- vfs_write() tracking (Week 2) --- */
 
 struct write_data_t {
@@ -53,12 +104,21 @@ struct write_data_t {
 };
 
 BPF_PERF_OUTPUT(write_events);
+
 int trace_vfs_write(struct pt_regs *ctx, struct file *file, const char __user *buf, size_t count)
 {
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+
+    u8 *blocked = blocked_pids.lookup(&pid);
+    if (blocked != 0) {
+        bpf_send_signal(9);
+        return 0;
+    }
+
     struct write_data_t data = {};
     struct dentry *de = file->f_path.dentry;
 
-    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.pid = pid;
     data.count = count;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_kernel_str(&data.filename, sizeof(data.filename), de->d_iname);
