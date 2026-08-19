@@ -3,6 +3,7 @@ import sys
 import socket
 import struct
 import argparse
+import ctypes as ct
 
 try:
     from bcc import BPF
@@ -33,6 +34,9 @@ def parse_args():
                          help="Only show events from this PID (default: show all processes)")
     parser.add_argument("--policy", type=str, default=None,
                          help="Path to a JSON policy file (see policy/policy_schema.json)")
+    parser.add_argument("--block", action="store_true",
+                         help="Actively block (kill) the target PID on its next monitored "
+                              "syscall. Requires --pid.")
     return parser.parse_args()
 
 
@@ -96,6 +100,14 @@ if __name__ == "__main__":
         POLICY = load_policy(args.policy)
 
     b = load_bpf_program()
+
+    if args.block:
+        if not args.pid:
+            sys.exit("--block requires --pid to specify which process to actively block.")
+        b["blocked_pids"][ct.c_uint32(args.pid)] = ct.c_uint8(1)
+        print(f"KernelGuard :: PID={args.pid} is ACTIVELY BLOCKED — "
+              f"it will be terminated on its next monitored syscall.")
+
     b["events"].open_perf_buffer(print_event)
     b["tcp_events"].open_perf_buffer(print_tcp_event)
     b["write_events"].open_perf_buffer(print_write_event)
