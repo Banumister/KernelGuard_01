@@ -1,0 +1,12 @@
+[Unit]
+Description=KernelGuard eBPF runtime security daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/kernelguard/controller/bpf_loader.py
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
