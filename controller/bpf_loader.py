@@ -4,6 +4,7 @@ import socket
 import struct
 import argparse
 import ctypes as ct
+import signal
 
 try:
     from bcc import BPF
@@ -93,6 +94,11 @@ def print_write_event(cpu, data, size):
 if __name__ == "__main__":
     if os.geteuid() != 0:
         sys.exit("KernelGuard must be run as root (sudo) to load eBPF programs.")
+
+    def handle_sigterm(signum, frame):
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
 
     args = parse_args()
     TARGET_PID = args.pid
