@@ -25,6 +25,11 @@ BPF_SOURCE_FILE = os.path.join(
     "execve_trace.c",
 )
 
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+
 TARGET_PID = None
 POLICY = None
 
@@ -74,7 +79,10 @@ def print_tcp_event(cpu, data, size):
 
     status = ""
     if POLICY is not None:
-        status = "[ALLOWED]" if is_ip_allowed(POLICY, daddr, dport) else "[BLOCKED - policy violation]"
+        if is_ip_allowed(POLICY, daddr, dport):
+            status = f"{GREEN}[ALLOWED]{RESET}"
+        else:
+            status = f"{RED}[BLOCKED - policy violation]{RESET}"
     print(f"PID={event.pid:<7} CONNECT {saddr} -> {daddr}:{dport} {status}")
 
 
@@ -86,7 +94,10 @@ def print_write_event(cpu, data, size):
 
     status = ""
     if POLICY is not None:
-        status = "[ALLOWED]" if is_path_allowed(POLICY, filename) else "[BLOCKED - policy violation]"
+        if is_path_allowed(POLICY, filename):
+            status = f"{GREEN}[ALLOWED]{RESET}"
+        else:
+            status = f"{RED}[BLOCKED - policy violation]{RESET}"
     print(f"PID={event.pid:<7} COMM={event.comm.decode('utf-8', 'replace'):<16} "
           f"WRITE {event.count} bytes -> {filename} {status}")
 
@@ -111,17 +122,18 @@ if __name__ == "__main__":
         if not args.pid:
             sys.exit("--block requires --pid to specify which process to actively block.")
         b["blocked_pids"][ct.c_uint32(args.pid)] = ct.c_uint8(1)
-        print(f"KernelGuard :: PID={args.pid} is ACTIVELY BLOCKED — "
-              f"it will be terminated on its next monitored syscall.")
+        print(f"{RED}KernelGuard :: PID={args.pid} is ACTIVELY BLOCKED — "
+              f"it will be terminated on its next monitored syscall.{RESET}")
 
     b["events"].open_perf_buffer(print_event)
     b["tcp_events"].open_perf_buffer(print_tcp_event)
     b["write_events"].open_perf_buffer(print_write_event)
 
-    print("KernelGuard :: watching execve(), tcp_connect(), and vfs_write() syscalls. Ctrl-C to stop.")
+    print(f"{YELLOW}KernelGuard :: watching execve(), tcp_connect(), and vfs_write() syscalls. "
+          f"Ctrl-C to stop.{RESET}")
 
     try:
         while True:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
-        print("\nKernelGuard stopped. Kernel hooks detached.")
+        print(f"{YELLOW}\nKernelGuard stopped. Kernel hooks detached.{RESET}")
