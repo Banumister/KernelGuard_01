@@ -1,7 +1,12 @@
 import json
+import os
+import sys
+
 
 
 def load_policy(path):
+    if not os.path.isfile(path):
+        sys.exit(f"ERROR: policy file not found: {path}")
     with open(path, "r") as f:
         return json.load(f)
 
