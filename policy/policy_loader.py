@@ -8,8 +8,10 @@ def load_policy(path):
     if not os.path.isfile(path):
         sys.exit(f"ERROR: policy file not found: {path}")
     with open(path, "r") as f:
-        return json.load(f)
-
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as e:
+            sys.exit(f"ERROR: policy file is not valid JSON: {path}\n{e}")
 
 def is_ip_allowed(policy, ip, port):
     network = policy.get("network", {})
