@@ -3,6 +3,8 @@ import os
 import sys
 import tempfile
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"))
 from policy_loader import load_policy, is_ip_allowed, is_path_allowed
 
@@ -26,6 +28,22 @@ def test_load_policy():
             json.dump(SAMPLE_POLICY, f)
         loaded = load_policy(path)
         assert loaded == SAMPLE_POLICY
+    finally:
+        os.remove(path)
+
+
+def test_load_policy_missing_file_exits():
+    with pytest.raises(SystemExit):
+        load_policy("/nonexistent/path/to/policy.json")
+
+
+def test_load_policy_invalid_json_exits():
+    fd, path = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("{ not valid json")
+        with pytest.raises(SystemExit):
+            load_policy(path)
     finally:
         os.remove(path)
 
