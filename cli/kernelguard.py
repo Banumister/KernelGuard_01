@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
+"""
+KernelGuard Security CLI
+
+    kernelguard run <script.py> [--block-network] [--block-write] [--policy policy.json]
+
+Week 1 status: this is a skeleton. `run` launches the target script and
+tells you how to attach the Week 1 execve() tracer to it. Policy
+enforcement flags (--block-network / --block-write / --policy) are
+parsed but not yet enforced — that lands in Week 3 (see docs/ROADMAP.md).
+"""
 import argparse
 import os
 import subprocess
 import sys
-
-RED = "\033[91m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-RESET = "\033[0m"
-
-CONTROLLER_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "controller",
-    "bpf_loader.py",
-)
 
 
 def build_parser():
@@ -23,11 +22,23 @@ def build_parser():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = subparsers.add_parser("run", help="Run a Python script under KernelGuard supervision")
+    run_parser = subparsers.add_parser(
+        "run", help="Run a Python script under KernelGuard supervision"
+    )
     run_parser.add_argument("script", help="Path to the untrusted Python script")
-    run_parser.add_argument("--block-network", action="store_true",
-                             help="Actively block the script if it attempts a monitored syscall")
-    run_parser.add_argument("--policy", help="Path to a JSON policy file")
+    run_parser.add_argument(
+        "--block-network",
+        action="store_true",
+        help="[Week 3] Block unauthorized network syscalls",
+    )
+    run_parser.add_argument(
+        "--block-write",
+        action="store_true",
+        help="[Week 3] Block unauthorized filesystem writes",
+    )
+    run_parser.add_argument(
+        "--policy", help="[Week 3] Path to a JSON policy file (see policy/)"
+    )
 
     return parser
 
@@ -37,23 +48,27 @@ def main():
     args = parser.parse_args()
 
     if args.command == "run":
-        print(f"{YELLOW}[KernelGuard] Launching target script: {args.script}{RESET}")
+        if not os.path.isfile(args.script):
+            print(
+                f"[KernelGuard] ERROR: script not found: {args.script}\n"
+                "[KernelGuard] Check the path and try again "
+                "(relative paths are resolved from the current directory).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if args.block_network or args.block_write or args.policy:
+            print(
+                "[KernelGuard] NOTE: policy enforcement is not implemented yet "
+                "(see Week 3 in docs/ROADMAP.md). Running in log-only mode."
+            )
+
+        print(f"[KernelGuard] Launching target script: {args.script}")
         proc = subprocess.Popen([sys.executable, args.script])
-        print(f"{YELLOW}[KernelGuard] Target PID={proc.pid}{RESET}")
-
-        controller_cmd = ["sudo", "python3", CONTROLLER_PATH, "--pid", str(proc.pid)]
-        if args.block_network:
-            controller_cmd.append("--block")
-        if args.policy:
-            controller_cmd += ["--policy", args.policy]
-
-        print(f"{GREEN}[KernelGuard] Starting supervision...{RESET}")
-        tracer = subprocess.Popen(controller_cmd)
-
-        try:
-            proc.wait()
-        finally:
-            tracer.terminate()
+        print(f"[KernelGuard] Target PID={proc.pid}.")
+        print("[KernelGuard] In another terminal, attach the tracer with:")
+        print(f"    sudo python3 controller/bpf_loader.py --pid {proc.pid}")
+        proc.wait()
 
 
 if __name__ == "__main__":
