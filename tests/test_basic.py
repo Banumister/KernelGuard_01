@@ -6,7 +6,7 @@ import tempfile
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"))
-from policy_loader import load_policy, is_ip_allowed, is_path_allowed
+from policy_loader import load_policy, is_ip_allowed, is_path_allowed, should_enforce
 
 
 SAMPLE_POLICY = {
@@ -68,3 +68,22 @@ def test_default_allow_overrides_list():
     open_policy = {"network": {"default": "allow"}, "filesystem": {"default": "allow"}}
     assert is_ip_allowed(open_policy, "1.2.3.4", 80) is True
     assert is_path_allowed(open_policy, "/anything") is True
+
+
+def test_should_enforce_true_when_enabled_policy_loaded_and_blocked():
+    assert should_enforce(SAMPLE_POLICY, False, True) is True
+
+
+def test_should_enforce_false_when_enforce_flag_off():
+    # --policy alone (no --enforce) stays visibility-only, matching
+    # Week 2 behavior — a violation must not get silently upgraded to
+    # an actual kill just because a policy file was loaded.
+    assert should_enforce(SAMPLE_POLICY, False, False) is False
+
+
+def test_should_enforce_false_when_action_was_allowed():
+    assert should_enforce(SAMPLE_POLICY, True, True) is False
+
+
+def test_should_enforce_false_when_no_policy_loaded():
+    assert should_enforce(None, False, True) is False

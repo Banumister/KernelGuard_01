@@ -31,3 +31,16 @@ def is_path_allowed(policy, filepath):
         if filepath.startswith(allowed_prefix):
             return True
     return False
+
+
+def should_enforce(policy, allowed, enforce_enabled):
+    """Decide whether a policy violation should trigger active blocking
+    (killing the PID), as opposed to just being logged.
+
+    Enforcement only fires when all three are true: an operator opted in
+    with --enforce, a policy is actually loaded, and this specific event
+    was not allowed by it. This is intentionally conservative — passing
+    --policy alone still means visibility-only, matching Week 2 behavior;
+    --enforce is what turns a [BLOCKED] tag into a real kill.
+    """
+    return bool(enforce_enabled) and policy is not None and not allowed
