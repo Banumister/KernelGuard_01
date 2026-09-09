@@ -55,3 +55,34 @@ def test_ebpf_source_file_exists():
     assert ebpf_source.exists()
     text = ebpf_source.read_text()
     assert "execve" in text.lower()
+
+
+def test_run_prints_scope_note_when_enforcement_flags_used(tmp_path, monkeypatch, capsys):
+    """The CLI must not silently pretend to enforce --block-network /
+    --block-write / --policy — it should say out loud that enforcement
+    isn't implemented yet (see README.md > Known limitations)."""
+    cli = _load_module("kernelguard_cli_note_on", "cli/kernelguard.py")
+
+    script = tmp_path / "noop.py"
+    script.write_text("pass\n")
+    monkeypatch.setattr(sys, "argv", ["kernelguard", "run", str(script), "--block-network"])
+
+    cli.main()
+
+    captured = capsys.readouterr()
+    assert "policy enforcement is not implemented yet" in captured.out
+
+
+def test_run_omits_scope_note_without_enforcement_flags(tmp_path, monkeypatch, capsys):
+    """Without any of --block-network/--block-write/--policy, the note
+    shouldn't print — it's only relevant when those flags are used."""
+    cli = _load_module("kernelguard_cli_note_off", "cli/kernelguard.py")
+
+    script = tmp_path / "noop.py"
+    script.write_text("pass\n")
+    monkeypatch.setattr(sys, "argv", ["kernelguard", "run", str(script)])
+
+    cli.main()
+
+    captured = capsys.readouterr()
+    assert "policy enforcement is not implemented yet" not in captured.out
