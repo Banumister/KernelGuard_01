@@ -46,14 +46,21 @@ enforced. That's Week 3.
       (execve, tcp_connect, vfs_write).
 - [x] `bpf_loader.py --block` — manually mark a PID as blocked when
       attaching the tracer directly.
-- [ ] Wire real-time enforcement into the policy engine: when
-      `--policy` flags a connect/write as `[BLOCKED]`, automatically add
-      that PID to `blocked_pids` instead of just logging it.
+- [x] Wire real-time enforcement into the policy engine: `bpf_loader.py
+      --enforce` (requires `--policy`) now automatically adds a PID to
+      `blocked_pids` the moment a connect/write is tagged `[BLOCKED]`,
+      via `policy_loader.should_enforce()` + `bpf_loader.enforce_block()`.
+      Deliberately opt-in — `--policy` alone still stays visibility-only,
+      so existing usage doesn't change behavior underneath anyone.
+- [x] Tests for the enforcement decision path: `tests/test_basic.py`
+      covers `should_enforce()` (enabled+blocked → enforce; disabled,
+      allowed, or no-policy → never enforce). Verified against the real
+      `print_tcp_event`/`print_write_event` logic with a mocked BPF map,
+      since `bpf_loader.py` can't be imported without `bcc` installed.
 - [ ] Implement `--block-network` / `--block-write` on
       `cli/kernelguard.py run` so the CLI's own flags actually enforce,
-      not just warn.
-- [ ] Tests for the enforcement path (can mock the BPF map interaction
-      without needing a real kernel).
+      not just warn. This is separate from `bpf_loader.py --enforce`
+      above and still open.
 
 ## Week 4 — Packaging & daemon mode ⏳ not started
 
