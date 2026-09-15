@@ -32,7 +32,8 @@ RESET = "\033[0m"
 
 TARGET_PID = None
 POLICY = None
-ENFORCE = False
+ENFORCE_NETWORK = False
+ENFORCE_WRITE = False
 
 
 def parse_args():
@@ -43,9 +44,19 @@ def parse_args():
                          help="Path to a JSON policy file (see policy/policy_schema.json)")
     parser.add_argument("--enforce", action="store_true",
                          help="Combined with --policy: automatically block (kill) a PID "
-                              "the next time it triggers a BLOCKED policy violation. "
-                              "Without this flag, --policy only tags and logs violations "
-                              "(visibility only). Requires --policy.")
+                              "the next time it triggers ANY BLOCKED policy violation "
+                              "(network or filesystem). Shorthand for --enforce-network "
+                              "--enforce-write together. Without any --enforce* flag, "
+                              "--policy only tags and logs violations (visibility only). "
+                              "Requires --policy.")
+    parser.add_argument("--enforce-network", action="store_true",
+                         help="Combined with --policy: automatically block (kill) a PID "
+                              "on its next BLOCKED network connection specifically. "
+                              "Requires --policy.")
+    parser.add_argument("--enforce-write", action="store_true",
+                         help="Combined with --policy: automatically block (kill) a PID "
+                              "on its next BLOCKED file write specifically. "
+                              "Requires --policy.")
     parser.add_argument("--block", action="store_true",
                          help="Actively block (kill) the target PID on its next monitored "
                               "syscall. Requires --pid.")
@@ -99,7 +110,7 @@ def print_tcp_event(cpu, data, size):
             status = f"{GREEN}[ALLOWED]{RESET}"
         else:
             status = f"{RED}[BLOCKED - policy violation]{RESET}"
-            if should_enforce(POLICY, allowed, ENFORCE):
+            if should_enforce(POLICY, allowed, ENFORCE_NETWORK):
                 enforce_block(event.pid, f"connection to {daddr}:{dport} violates policy")
     print(f"PID={event.pid:<7} CONNECT {saddr} -> {daddr}:{dport} {status}")
 
@@ -117,7 +128,7 @@ def print_write_event(cpu, data, size):
             status = f"{GREEN}[ALLOWED]{RESET}"
         else:
             status = f"{RED}[BLOCKED - policy violation]{RESET}"
-            if should_enforce(POLICY, allowed, ENFORCE):
+            if should_enforce(POLICY, allowed, ENFORCE_WRITE):
                 enforce_block(event.pid, f"write to {filename} violates policy")
     print(f"PID={event.pid:<7} COMM={event.comm.decode('utf-8', 'replace'):<16} "
           f"WRITE {event.count} bytes -> {filename} {status}")
@@ -137,15 +148,23 @@ if __name__ == "__main__":
     if args.policy:
         POLICY = load_policy(args.policy)
 
-    if args.enforce and not POLICY:
-        sys.exit("--enforce requires --policy to know what to enforce against.")
-    ENFORCE = args.enforce
+    ENFORCE_NETWORK = args.enforce or args.enforce_network
+    ENFORCE_WRITE = args.enforce or args.enforce_write
+    if (ENFORCE_NETWORK or ENFORCE_WRITE) and not POLICY:
+        sys.exit("--enforce/--enforce-network/--enforce-write require --policy "
+                  "to know what to enforce against.")
 
     b = load_bpf_program()
 
-    if ENFORCE:
-        print(f"{YELLOW}KernelGuard :: --enforce is ON — policy violations will be "
-              f"actively blocked, not just logged.{RESET}")
+    if ENFORCE_NETWORK or ENFORCE_WRITE:
+        parts = []
+        if ENFORCE_NETWORK:
+            parts.append("network")
+        if ENFORCE_WRITE:
+            parts.append("filesystem")
+        print(f"{YELLOW}KernelGuard :: enforcement is ON for: {', '.join(parts)} — "
+              f"policy violations in that category will be actively blocked, "
+              f"not just logged.{RESET}")
 
     if args.block:
         if not args.pid:

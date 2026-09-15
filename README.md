@@ -17,11 +17,11 @@ eBPF programs directly into the Linux kernel. Instead of restricting
 Python from *within* Python, KernelGuard operates at "Ring 0" (kernel
 space): it intercepts raw syscalls (`execve`, `tcp_connect`, `vfs_write`)
 made by specific Python processes. If a script tries to open a network
-socket without pre-authorization, the eBPF program blocks the syscall
-instantly and alerts the user.
+socket or write a file outside its policy, KernelGuard can log it or
+actively kill the process, depending on the flags you pass.
 
-> **Note:** automatic blocking on a policy violation is a goal, not yet
-> the current behavior — see [Known limitations](#known-limitations--current-scope)
+> **Note:** automatic blocking on a policy violation is opt-in, not the
+> default — see [Known limitations](#known-limitations--current-scope)
 > below for exactly what's implemented today.
 
 ## Project structure
@@ -30,14 +30,16 @@ kernelguard/
 │ └── execve_trace.c # eBPF hooks: execve, tcp_connect, vfs_write, active blocking
 ├── controller/
 │ ├── init.py
-│ └── bpf_loader.py # Compiles/loads eBPF, PID filtering, policy tagging, --block
+│ └── bpf_loader.py # Compiles/loads eBPF, PID filtering, policy tagging, --enforce-network/--enforce-write/--block
 ├── cli/
-│ └── kernelguard.py # kernelguard run script.py --block-network entrypoint
+│ └── kernelguard.py # kernelguard run script.py --block-network entrypoint (auto-attaches the tracer)
 ├── policy/
 │ ├── policy_schema.json # Example JSON policy (network + filesystem allow-lists)
 │ └── policy_loader.py # Loads and evaluates policy rules
 ├── systemd/
 │ └── kernelguard.service # systemd unit for running as a background daemon
+├── scripts/
+│ └── install.sh # Installs into /opt/kernelguard and sets up the systemd service
 ├── demo/
 │ └── kernelguard_demo.py # Cross-platform demo output (see demo/README.md)
 ├── docs/
@@ -60,34 +62,63 @@ sudo apt install -y bpfcc-tools linux-headers-$(uname -r) python3-bpfcc
 
 ## Usage
 
-Watch a specific process:
+Watch a specific process (visibility only — nothing is blocked):
 
 ```bash
 sudo python3 controller/bpf_loader.py --pid 1234
 ```
 
-Apply a policy (tags each event allowed/blocked):
+Apply a policy (tags each event allowed/blocked, still visibility only):
 
 ```bash
 sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.json
 ```
 
-Actively terminate a process on its next monitored syscall:
+Actively enforce the policy — kill the process the moment it triggers a
+blocked network connection and/or file write:
+
+```bash
+sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.json --enforce-network --enforce-write
+# --enforce is shorthand for both flags together
+```
+
+Actively terminate a process unconditionally on its next monitored syscall:
 
 ```bash
 sudo python3 controller/bpf_loader.py --pid 1234 --block
 ```
 
-Or use the CLI, which launches the target script and supervises it in one step:
+Or use the CLI, which launches the target script and auto-attaches the
+tracer in one step — no second terminal needed:
 
 ```bash
-sudo python3 cli/kernelguard.py run untrusted.py --block-network --policy policy/policy_schema.json
+# visibility only (tags events, doesn't kill anything)
+sudo python3 cli/kernelguard.py run untrusted.py --policy policy/policy_schema.json
+
+# actively enforced
+sudo python3 cli/kernelguard.py run untrusted.py --block-network --block-write --policy policy/policy_schema.json
 ```
+
+## Running as a daemon
+
+`scripts/install.sh` copies the repo into `/opt/kernelguard` and installs
+`systemd/kernelguard.service`:
+
+```bash
+sudo ./scripts/install.sh
+# review/replace the policy file and ExecStart flags as instructed, then:
+sudo systemctl start kernelguard
+```
+
+See `docs/ROADMAP.md` (Week 4) for what's still open in daemon mode
+(policy reload, log rotation). Uninstall with
+`sudo ./scripts/install.sh --uninstall`.
 
 ## Testing
 
 Tests that don't require root or a real kernel (policy logic, CLI argument
-parsing) live in `tests/` and run with:
+parsing, unit file / install script validation) live in `tests/` and run
+with:
 
 ```bash
 pip install pytest
@@ -100,29 +131,27 @@ pytest
   and `vfs_write` directly in the kernel, plus a `blocked_pids` map for
   active enforcement.
 - **Python BPF Controller (`bcc`)** — compiles and loads the eBPF code,
-  manages PID filtering and policy evaluation.
+  manages PID filtering, policy evaluation, and enforcement.
 - **Policy engine** — JSON-defined allow-lists for network and filesystem
   access.
-- **Security CLI** — `kernelguard run untrusted.py --block-network`.
+- **Security CLI** — `kernelguard run untrusted.py --block-network`,
+  which auto-attaches the tracer for you.
 
 ## Known limitations / current scope
 
 Being upfront about what's actually implemented vs. still planned (full
 detail in [docs/ROADMAP.md](docs/ROADMAP.md)):
 
-- **Visibility, not enforcement, by default.** `bpf_loader.py --policy`
-  tags every connection and file write as allowed or blocked — but a
-  `[BLOCKED]` tag is a log line, not an action. Nothing is killed
-  automatically when a policy is violated yet.
-- **`cli/kernelguard.py run`'s `--block-network` / `--block-write` /
-  `--policy` flags are parsed but not enforced.** The CLI prints a note
-  saying so at runtime rather than silently pretending to protect you.
-- **Manual blocking exists, but isn't automatic.** `bpf_loader.py --pid
-  <PID> --block` will kill a specific PID on its next monitored syscall
-  — the kernel-side mechanism (`blocked_pids` map, `bpf_send_signal(9)`
-  in `ebpf/execve_trace.c`) is real and working, it's just not wired up
-  to fire automatically from a policy violation. That's the core of
-  Week 3.
+- **Enforcement is opt-in, not default.** `--policy` alone (on either
+  `bpf_loader.py` or `cli/kernelguard.py run`) stays visibility-only —
+  events get tagged `[ALLOWED]`/`[BLOCKED]` but nothing is killed. You
+  have to explicitly add `--enforce`/`--enforce-network`/`--enforce-write`
+  (loader) or `--block-network`/`--block-write` (CLI) to turn a
+  `[BLOCKED]` tag into an actual `SIGKILL`.
+- **Daemon mode is new and unhardened.** `scripts/install.sh` +
+  `systemd/kernelguard.service` will run KernelGuard persistently, but
+  policy reload and log rotation aren't implemented yet — restarting the
+  service is currently the only way to pick up a policy change.
 - **Requires a real Linux kernel with BCC.** Nothing in this project can
   load or run on Windows, macOS, or most restricted cloud sandboxes —
   BCC needs to compile against a kernel-headers package matching

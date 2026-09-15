@@ -38,7 +38,7 @@ yet — `cli/kernelguard.py run` explicitly logs a note that
 `--block-network` / `--block-write` / `--policy` are parsed but not
 enforced. That's Week 3.
 
-## Week 3 — Active enforcement 🚧 in progress
+## Week 3 — Active enforcement ✅ done
 
 - [x] `blocked_pids` BPF hash map + `bpf_send_signal(9)` in
       `execve_trace.c` — the kernel-side mechanism to kill a flagged PID
@@ -57,21 +57,40 @@ enforced. That's Week 3.
       allowed, or no-policy → never enforce). Verified against the real
       `print_tcp_event`/`print_write_event` logic with a mocked BPF map,
       since `bpf_loader.py` can't be imported without `bcc` installed.
-- [ ] Implement `--block-network` / `--block-write` on
-      `cli/kernelguard.py run` so the CLI's own flags actually enforce,
-      not just warn. This is separate from `bpf_loader.py --enforce`
-      above and still open.
+- [x] Granular enforcement: `bpf_loader.py` now takes independent
+      `--enforce-network` / `--enforce-write` flags (`--enforce` stays
+      as shorthand for both together), so network and filesystem
+      blocking can be turned on separately.
+- [x] `cli/kernelguard.py run --block-network` / `--block-write` now
+      actually enforce instead of just warning: `run` automatically
+      launches `controller/bpf_loader.py` as a subprocess (translating
+      `--block-network`/`--block-write`/`--policy` into
+      `--enforce-network`/`--enforce-write`/`--policy`), so a single
+      `kernelguard run` command is enough end-to-end — no second
+      terminal needed. Without any of those flags it falls back to
+      printing the old manual two-terminal attach instructions.
+      `--block-network`/`--block-write` each require `--policy` and
+      fail fast with a clear error if it's missing.
+- [x] Tests: `tests/test_cli_smoke.py` covers the new
+      `build_tracer_command()` translation (visibility-only, network-only,
+      both-enforce), the `--block-*` without `--policy` fast-fail path,
+      and the auto-attach behavior itself via a monkeypatched
+      `subprocess.Popen` (so tests never actually spawn the real tracer,
+      which needs bcc/root). 31/31 tests passing across the suite.
 
-## Week 4 — Packaging & daemon mode ⏳ not started
+## Week 4 — Packaging & daemon mode 🚧 in progress
 
 - [x] `systemd/kernelguard.service` — stub unit file
       (`ExecStart=/usr/bin/python3 /opt/kernelguard/controller/bpf_loader.py`).
-- [ ] Installer / packaging steps documenting how `/opt/kernelguard`
-      gets populated (currently assumed, not scripted).
+- [x] `scripts/install.sh` — installer script that copies the repo into
+      `/opt/kernelguard`, installs Python dependencies, and installs +
+      enables the systemd unit. Replaces the previous "currently
+      assumed, not scripted" gap.
+- [x] Install steps documented in `README.md` (daemon installation
+      section pointing at `scripts/install.sh`).
 - [ ] `systemd/kernelguard.service` reviewed for a persistent daemon
       use case (currently mirrors the one-shot CLI invocation; a daemon
-      needs to handle policy reload, log rotation, etc.).
-- [ ] Document daemon installation in `README.md`.
+      still needs to handle policy reload and log rotation).
 
 ## Environment note (applies to every week above)
 

@@ -57,26 +57,154 @@ def test_ebpf_source_file_exists():
     assert "execve" in text.lower()
 
 
-def test_run_prints_scope_note_when_enforcement_flags_used(tmp_path, monkeypatch, capsys):
-    """The CLI must not silently pretend to enforce --block-network /
-    --block-write / --policy — it should say out loud that enforcement
-    isn't implemented yet (see README.md > Known limitations)."""
-    cli = _load_module("kernelguard_cli_note_on", "cli/kernelguard.py")
+def test_build_tracer_command_visibility_only():
+    """--policy alone (no --block-*) should attach the tracer without
+    either --enforce-* flag — visibility/tagging only."""
+    cli = _load_module("kernelguard_cli_btc_vis", "cli/kernelguard.py")
+    cmd = cli.build_tracer_command(123, "policy/policy_schema.json", False, False)
+    assert cmd == [
+        sys.executable, cli.BPF_LOADER,
+        "--pid", "123",
+        "--policy", "policy/policy_schema.json",
+    ]
+
+
+def test_build_tracer_command_with_both_enforce_flags():
+    cli = _load_module("kernelguard_cli_btc_enf", "cli/kernelguard.py")
+    cmd = cli.build_tracer_command(123, "policy/policy_schema.json", True, True)
+    assert "--enforce-network" in cmd
+    assert "--enforce-write" in cmd
+
+
+def test_build_tracer_command_network_only():
+    cli = _load_module("kernelguard_cli_btc_net", "cli/kernelguard.py")
+    cmd = cli.build_tracer_command(123, "policy/policy_schema.json", True, False)
+    assert "--enforce-network" in cmd
+    assert "--enforce-write" not in cmd
+
+
+class _FakeProc:
+    """Stands in for subprocess.Popen's return value in CLI tests, so
+    tests never actually spawn controller/bpf_loader.py (which needs
+    bcc/root and would fail or hang outside a real Linux+BCC box)."""
+
+    _next_pid = 40000
+
+    def __init__(self):
+        type(self)._next_pid += 1
+        self.pid = type(self)._next_pid
+        self.terminated = False
+
+    def wait(self):
+        return 0
+
+    def terminate(self):
+        self.terminated = True
+
+
+def test_run_block_network_without_policy_exits_cleanly(tmp_path, monkeypatch, capsys):
+    """--block-network/--block-write need a policy to enforce against —
+    this should fail fast with a clear message, before anything is
+    launched."""
+    cli = _load_module("kernelguard_cli_blockerr", "cli/kernelguard.py")
+
+    def fail_popen(*a, **kw):
+        raise AssertionError("subprocess.Popen must not be called when validation fails")
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fail_popen)
 
     script = tmp_path / "noop.py"
     script.write_text("pass\n")
     monkeypatch.setattr(sys, "argv", ["kernelguard", "run", str(script), "--block-network"])
 
-    cli.main()
+    try:
+        cli.main()
+        assert False, "expected SystemExit"
+    except SystemExit as exc:
+        assert exc.code == 1
 
     captured = capsys.readouterr()
-    assert "policy enforcement is not implemented yet" in captured.out
+    assert "--policy" in captured.err
 
 
-def test_run_omits_scope_note_without_enforcement_flags(tmp_path, monkeypatch, capsys):
-    """Without any of --block-network/--block-write/--policy, the note
-    shouldn't print — it's only relevant when those flags are used."""
-    cli = _load_module("kernelguard_cli_note_off", "cli/kernelguard.py")
+def test_run_with_policy_autoattaches_tracer_in_visibility_mode(tmp_path, monkeypatch, capsys):
+    """`run --policy` alone should now auto-attach the tracer itself
+    (single command, no second terminal needed) — but without either
+    --enforce-* flag, since --policy alone stays visibility-only."""
+    cli = _load_module("kernelguard_cli_autoattach_vis", "cli/kernelguard.py")
+
+    calls = []
+
+    def fake_popen(cmd, *a, **kw):
+        calls.append(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+
+    script = tmp_path / "noop.py"
+    script.write_text("pass\n")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["kernelguard", "run", str(script), "--policy", "policy/policy_schema.json"],
+    )
+
+    cli.main()
+
+    assert len(calls) == 2, "expected one Popen for the script, one for the tracer"
+    script_cmd, tracer_cmd = calls
+    assert script_cmd == [sys.executable, str(script)]
+    assert tracer_cmd[0] == sys.executable
+    assert tracer_cmd[1] == cli.BPF_LOADER
+    assert "--policy" in tracer_cmd
+    assert "--enforce-network" not in tracer_cmd
+    assert "--enforce-write" not in tracer_cmd
+
+    captured = capsys.readouterr()
+    assert "Attaching tracer (visibility-only)" in captured.out
+
+
+def test_run_with_block_network_autoattaches_enforcing_tracer(tmp_path, monkeypatch, capsys):
+    cli = _load_module("kernelguard_cli_autoattach_enf", "cli/kernelguard.py")
+
+    calls = []
+
+    def fake_popen(cmd, *a, **kw):
+        calls.append(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+
+    script = tmp_path / "noop.py"
+    script.write_text("pass\n")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["kernelguard", "run", str(script), "--block-network",
+         "--policy", "policy/policy_schema.json"],
+    )
+
+    cli.main()
+
+    assert len(calls) == 2
+    tracer_cmd = calls[1]
+    assert "--enforce-network" in tracer_cmd
+    assert "--enforce-write" not in tracer_cmd
+
+    captured = capsys.readouterr()
+    assert "Attaching tracer (enforcing)" in captured.out
+
+
+def test_run_without_any_flags_prints_manual_attach_instructions(tmp_path, monkeypatch, capsys):
+    """No --policy/--block-*: fall back to the old two-terminal
+    instructions instead of auto-attaching anything."""
+    cli = _load_module("kernelguard_cli_manual", "cli/kernelguard.py")
+
+    calls = []
+
+    def fake_popen(cmd, *a, **kw):
+        calls.append(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
 
     script = tmp_path / "noop.py"
     script.write_text("pass\n")
@@ -84,5 +212,6 @@ def test_run_omits_scope_note_without_enforcement_flags(tmp_path, monkeypatch, c
 
     cli.main()
 
+    assert len(calls) == 1, "only the script should be launched, no tracer auto-attached"
     captured = capsys.readouterr()
-    assert "policy enforcement is not implemented yet" not in captured.out
+    assert "In another terminal, attach the tracer with:" in captured.out
