@@ -110,9 +110,22 @@ sudo ./scripts/install.sh
 sudo systemctl start kernelguard
 ```
 
-See `docs/ROADMAP.md` (Week 4) for what's still open in daemon mode
-(policy reload, log rotation). Uninstall with
-`sudo ./scripts/install.sh --uninstall`.
+**Updating the policy without downtime.** Editing the policy file and
+running `sudo systemctl reload kernelguard` sends `SIGHUP`, which
+reloads it from disk in place — the tracer keeps running the whole time,
+so nothing being watched gets missed. If the edited file is missing or
+isn't valid JSON, the reload is rejected and the *previous* policy stays
+in effect (with an error printed) rather than the daemon crashing or
+running with no policy at all. Only relevant when `--policy` was passed
+in `ExecStart`; without a policy loaded there's nothing to reload.
+
+**Log file, independent of the terminal.** Add `--log-file
+/var/log/kernelguard/events.log` to `ExecStart` to also mirror every
+event to a plain-text file with automatic rotation (`--log-max-bytes`,
+default ~10MB; `--log-backup-count`, default 3 — both optional), on top
+of whatever `journalctl -u kernelguard` already shows.
+
+Uninstall with `sudo ./scripts/install.sh --uninstall`.
 
 ## Testing
 
@@ -148,10 +161,11 @@ detail in [docs/ROADMAP.md](docs/ROADMAP.md)):
   have to explicitly add `--enforce`/`--enforce-network`/`--enforce-write`
   (loader) or `--block-network`/`--block-write` (CLI) to turn a
   `[BLOCKED]` tag into an actual `SIGKILL`.
-- **Daemon mode is new and unhardened.** `scripts/install.sh` +
-  `systemd/kernelguard.service` will run KernelGuard persistently, but
-  policy reload and log rotation aren't implemented yet — restarting the
-  service is currently the only way to pick up a policy change.
+- **Daemon mode is functional but not battle-tested.** `scripts/install.sh`
+  + `systemd/kernelguard.service` run KernelGuard persistently, with
+  `systemctl reload` for a no-downtime policy update and `--log-file`
+  for a rotating on-disk event log. It hasn't been run under sustained
+  real-world load yet, so treat it as new rather than hardened.
 - **Requires a real Linux kernel with BCC.** Nothing in this project can
   load or run on Windows, macOS, or most restricted cloud sandboxes —
   BCC needs to compile against a kernel-headers package matching

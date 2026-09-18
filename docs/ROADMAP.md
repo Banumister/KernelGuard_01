@@ -78,7 +78,7 @@ enforced. That's Week 3.
       `subprocess.Popen` (so tests never actually spawn the real tracer,
       which needs bcc/root). 31/31 tests passing across the suite.
 
-## Week 4 — Packaging & daemon mode 🚧 in progress
+## Week 4 — Packaging & daemon mode ✅ done
 
 - [x] `systemd/kernelguard.service` — stub unit file
       (`ExecStart=/usr/bin/python3 /opt/kernelguard/controller/bpf_loader.py`).
@@ -88,9 +88,28 @@ enforced. That's Week 3.
       assumed, not scripted" gap.
 - [x] Install steps documented in `README.md` (daemon installation
       section pointing at `scripts/install.sh`).
-- [ ] `systemd/kernelguard.service` reviewed for a persistent daemon
-      use case (currently mirrors the one-shot CLI invocation; a daemon
-      still needs to handle policy reload and log rotation).
+- [x] `systemd/kernelguard.service` reviewed for a persistent daemon
+      use case:
+      - **Policy reload without restart** — `policy_loader.reload_policy()`
+        re-reads the policy file from disk without exiting/crashing on a
+        bad edit (missing file or invalid JSON keeps the previous policy
+        in effect and reports why). `bpf_loader.py`'s new `handle_sighup`
+        wires this to `SIGHUP`, and the unit's new
+        `ExecReload=/bin/kill -HUP $MAINPID` makes
+        `systemctl reload kernelguard` trigger it — no restart, no gap
+        in tracing. Only active when `--policy` was passed at startup.
+      - **Log rotation** — new `--log-file` (+ `--log-max-bytes`,
+        `--log-backup-count`) flag on `bpf_loader.py` mirrors every
+        event to a `RotatingFileHandler`-backed plain-text file
+        (ANSI colors stripped), independent of `journalctl`'s own
+        retention.
+      - Tests: `tests/test_basic.py` covers `reload_policy()` directly
+        (successful reload, missing file, invalid JSON, no path set —
+        all without needing `bcc`); `tests/test_systemd_unit.py` checks
+        the new `ExecReload` line. The signal handler and log-file path
+        themselves were verified with the same mocked-`bcc` runtime
+        simulation used throughout this project, since `bpf_loader.py`
+        can't be imported without `bcc` installed.
 
 ## Environment note (applies to every week above)
 
