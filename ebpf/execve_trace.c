@@ -126,3 +126,39 @@ int trace_vfs_write(struct pt_regs *ctx, struct file *file, const char __user *b
     write_events.perf_submit(ctx, &data, sizeof(data));
     return 0;
 }
+
+/* --- unlinkat() / file-deletion tracking (Week 5) ---
+ *
+ * Hooked at the syscall entry (like trace_execve) rather than a VFS
+ * internal function, since unlink(2) and remove() both route through
+ * unlinkat(2) at the syscall layer on modern glibc/kernels -- this is
+ * a more stable attach point than vfs_unlink(), whose argument list
+ * has changed across kernel versions (mnt_userns was added, etc).
+ */
+
+struct unlink_data_t {
+    u32  pid;
+    char comm[TASK_COMM_LEN];
+    char filename[ARGSIZE];
+};
+
+BPF_PERF_OUTPUT(unlink_events);
+
+int trace_unlink(struct pt_regs *ctx, int dfd, const char __user *pathname, int flag)
+{
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+
+    u8 *blocked = blocked_pids.lookup(&pid);
+    if (blocked != 0) {
+        bpf_send_signal(9);
+        return 0;
+    }
+
+    struct unlink_data_t data = {};
+    data.pid = pid;
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    bpf_probe_read_user_str(&data.filename, sizeof(data.filename), pathname);
+
+    unlink_events.perf_submit(ctx, &data, sizeof(data));
+    return 0;
+}

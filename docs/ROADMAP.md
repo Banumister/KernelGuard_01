@@ -111,6 +111,36 @@ enforced. That's Week 3.
         simulation used throughout this project, since `bpf_loader.py`
         can't be imported without `bcc` installed.
 
+## Week 5 — Extended syscall coverage 🚧 in progress
+
+Weeks 1–4 covered the original planned scope end-to-end (interception,
+visibility, enforcement, packaging/daemon). This week is new: widening
+what KernelGuard actually watches beyond the original three syscalls.
+
+- [x] `unlinkat()` (file deletion) tracing — `ebpf/execve_trace.c`'s
+      new `trace_unlink`, hooked at the syscall entry (like
+      `trace_execve`) rather than a VFS-internal function, since
+      `vfs_unlink()`'s argument list has changed across kernel versions
+      (e.g. the `mnt_userns` parameter) while the syscall ABI is stable.
+      `controller/bpf_loader.py`'s new `print_unlink_event` evaluates
+      deletions against the *same* `filesystem.allow_write` policy list
+      and the same `--enforce-write`/`--block-write` flag as writes
+      (documented as a known simplification in `README.md` — no
+      separate `allow_delete` rule or flag yet). This directly serves
+      the project's own ransomware/deletion threat model from the
+      README's problem statement, which wasn't actually covered by any
+      hook before this.
+      Tests: `tests/test_cli_smoke.py`'s new
+      `test_ebpf_source_covers_all_four_hooked_syscalls` is a regression
+      check (no `bcc` needed) that the C source and the Python loader
+      agree on all four hooked syscalls; the handler itself was verified
+      with the same mocked-`bcc` runtime-simulation pattern used
+      throughout this project.
+- [ ] Process spawn/persistence tracking (`fork`/`clone`) — not started.
+- [ ] A dedicated filesystem policy action for deletion (separate from
+      `allow_write`) if the shared-flag simplification above turns out
+      to be too coarse in practice — not started.
+
 ## Environment note (applies to every week above)
 
 Everything here needs a Linux kernel with root access and a

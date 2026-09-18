@@ -122,6 +122,9 @@ def load_bpf_program():
     b.attach_kprobe(event="tcp_v4_connect", fn_name="trace_connect_entry")
     b.attach_kretprobe(event="tcp_v4_connect", fn_name="trace_connect_return")
     b.attach_kprobe(event="vfs_write", fn_name="trace_vfs_write")
+
+    unlink_fn = b.get_syscall_fnname("unlinkat")
+    b.attach_kprobe(event=unlink_fn, fn_name="trace_unlink")
     return b
 
 
@@ -204,6 +207,32 @@ def print_write_event(cpu, data, size):
     log_event(line)
 
 
+def print_unlink_event(cpu, data, size):
+    event = b["unlink_events"].event(data)
+    if TARGET_PID is not None and event.pid != TARGET_PID:
+        return
+    filename = event.filename.decode('utf-8', 'replace')
+
+    # Deletion is evaluated against the same filesystem policy as writes
+    # (allow_write is really "paths this script may modify", and
+    # deleting a file is a modification) and gated by the same
+    # --enforce-write / --block-write flag rather than a separate one,
+    # to keep the operator-facing flag set from growing per syscall.
+    status = ""
+    if POLICY is not None:
+        allowed = is_path_allowed(POLICY, filename)
+        if allowed:
+            status = f"{GREEN}[ALLOWED]{RESET}"
+        else:
+            status = f"{RED}[BLOCKED - policy violation]{RESET}"
+            if should_enforce(POLICY, allowed, ENFORCE_WRITE):
+                enforce_block(event.pid, f"deletion of {filename} violates policy")
+    line = (f"PID={event.pid:<7} COMM={event.comm.decode('utf-8', 'replace'):<16} "
+            f"DELETE -> {filename} {status}")
+    print(line)
+    log_event(line)
+
+
 if __name__ == "__main__":
     if os.geteuid() != 0:
         sys.exit("KernelGuard must be run as root (sudo) to load eBPF programs.")
@@ -261,9 +290,10 @@ if __name__ == "__main__":
     b["events"].open_perf_buffer(print_event)
     b["tcp_events"].open_perf_buffer(print_tcp_event)
     b["write_events"].open_perf_buffer(print_write_event)
+    b["unlink_events"].open_perf_buffer(print_unlink_event)
 
-    print(f"{YELLOW}KernelGuard :: watching execve(), tcp_connect(), and vfs_write() syscalls. "
-          f"Ctrl-C to stop.{RESET}")
+    print(f"{YELLOW}KernelGuard :: watching execve(), tcp_connect(), vfs_write(), and "
+          f"unlinkat() (file deletion) syscalls. Ctrl-C to stop.{RESET}")
 
     try:
         while True:
