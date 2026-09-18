@@ -6,7 +6,9 @@ import tempfile
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"))
-from policy_loader import load_policy, is_ip_allowed, is_path_allowed, should_enforce
+from policy_loader import (
+    load_policy, is_ip_allowed, is_path_allowed, should_enforce, reload_policy,
+)
 
 
 SAMPLE_POLICY = {
@@ -87,3 +89,49 @@ def test_should_enforce_false_when_action_was_allowed():
 
 def test_should_enforce_false_when_no_policy_loaded():
     assert should_enforce(None, False, True) is False
+
+
+def test_reload_policy_picks_up_a_changed_file():
+    fd, path = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(SAMPLE_POLICY, f)
+        updated_policy = {"network": {"default": "allow"}, "filesystem": {"default": "allow"}}
+        with open(path, "w") as f:
+            json.dump(updated_policy, f)
+        new_policy, error = reload_policy(path, SAMPLE_POLICY)
+        assert error is None
+        assert new_policy == updated_policy
+    finally:
+        os.remove(path)
+
+
+def test_reload_policy_missing_file_keeps_old_policy():
+    # A bad edit (e.g. the file got deleted/moved) must not crash a live
+    # tracer or silently disable enforcement -- the previous policy stays
+    # in effect and the caller is told why.
+    new_policy, error = reload_policy("/nonexistent/path/to/policy.json", SAMPLE_POLICY)
+    assert new_policy == SAMPLE_POLICY
+    assert error is not None
+    assert "not found" in error
+
+
+def test_reload_policy_invalid_json_keeps_old_policy():
+    fd, path = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("{ not valid json")
+        new_policy, error = reload_policy(path, SAMPLE_POLICY)
+        assert new_policy == SAMPLE_POLICY
+        assert error is not None
+        assert "not valid JSON" in error
+    finally:
+        os.remove(path)
+
+
+def test_reload_policy_no_path_set_keeps_old_policy():
+    # Mirrors bpf_loader.py's POLICY_PATH being None when --policy was
+    # never passed at startup -- SIGHUP should be a no-op, not a crash.
+    new_policy, error = reload_policy(None, SAMPLE_POLICY)
+    assert new_policy == SAMPLE_POLICY
+    assert error is not None

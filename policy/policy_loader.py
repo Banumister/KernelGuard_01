@@ -44,3 +44,25 @@ def should_enforce(policy, allowed, enforce_enabled):
     --enforce is what turns a [BLOCKED] tag into a real kill.
     """
     return bool(enforce_enabled) and policy is not None and not allowed
+
+
+def reload_policy(path, current_policy):
+    """Attempt to reload a policy file from disk, e.g. in response to a
+    SIGHUP so an operator can update a running daemon's rules without
+    restarting it (and losing whatever it's mid-way through tracing).
+
+    Deliberately never raises/exits: a bad edit to the policy file on
+    disk should not be able to crash or silently disable a live tracer.
+    On any failure, returns the *unchanged* current_policy plus a
+    human-readable error string; on success, returns (new_policy, None).
+    """
+    if not path:
+        return current_policy, "no --policy was set at startup; nothing to reload"
+    if not os.path.isfile(path):
+        return current_policy, f"policy file not found: {path}"
+    with open(path, "r") as f:
+        try:
+            new_policy = json.load(f)
+        except json.JSONDecodeError as e:
+            return current_policy, f"policy file is not valid JSON: {path}\n{e}"
+    return new_policy, None

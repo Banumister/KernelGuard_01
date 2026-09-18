@@ -59,3 +59,13 @@ def test_service_restarts_on_failure():
 def test_install_section_has_target():
     unit = _load_unit()
     assert unit.get("Install", "WantedBy").strip() != ""
+
+
+def test_service_supports_reload_without_restart():
+    # `systemctl reload kernelguard` should send SIGHUP so an operator
+    # can push a policy change without dropping the running trace (see
+    # controller/bpf_loader.py's handle_sighup).
+    unit = _load_unit()
+    exec_reload = unit.get("Service", "ExecReload")
+    assert "-HUP" in exec_reload or "-SIGHUP" in exec_reload
+    assert "$MAINPID" in exec_reload
