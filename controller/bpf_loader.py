@@ -233,6 +233,22 @@ def print_unlink_event(cpu, data, size):
     log_event(line)
 
 
+def print_fork_event(cpu, data, size):
+    # Visibility only, like print_event (execve) -- there's no
+    # "allowed to fork" concept in the current policy schema, so this
+    # reports every spawn rather than tagging ALLOWED/BLOCKED. A
+    # process forking to persist/evade shows up here even if it never
+    # execve()s into a different program.
+    event = b["fork_events"].event(data)
+    if TARGET_PID is not None and event.parent_pid != TARGET_PID:
+        return
+    line = (f"PID={event.parent_pid:<7} COMM={event.parent_comm.decode('utf-8', 'replace'):<16} "
+            f"FORK -> PID={event.child_pid:<7} "
+            f"COMM={event.child_comm.decode('utf-8', 'replace')}")
+    print(line)
+    log_event(line)
+
+
 if __name__ == "__main__":
     if os.geteuid() != 0:
         sys.exit("KernelGuard must be run as root (sudo) to load eBPF programs.")
@@ -291,9 +307,10 @@ if __name__ == "__main__":
     b["tcp_events"].open_perf_buffer(print_tcp_event)
     b["write_events"].open_perf_buffer(print_write_event)
     b["unlink_events"].open_perf_buffer(print_unlink_event)
+    b["fork_events"].open_perf_buffer(print_fork_event)
 
-    print(f"{YELLOW}KernelGuard :: watching execve(), tcp_connect(), vfs_write(), and "
-          f"unlinkat() (file deletion) syscalls. Ctrl-C to stop.{RESET}")
+    print(f"{YELLOW}KernelGuard :: watching execve(), tcp_connect(), vfs_write(), "
+          f"unlinkat() (file deletion), and process fork/clone. Ctrl-C to stop.{RESET}")
 
     try:
         while True:

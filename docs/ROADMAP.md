@@ -130,16 +130,42 @@ what KernelGuard actually watches beyond the original three syscalls.
       the project's own ransomware/deletion threat model from the
       README's problem statement, which wasn't actually covered by any
       hook before this.
-      Tests: `tests/test_cli_smoke.py`'s new
-      `test_ebpf_source_covers_all_four_hooked_syscalls` is a regression
-      check (no `bcc` needed) that the C source and the Python loader
-      agree on all four hooked syscalls; the handler itself was verified
-      with the same mocked-`bcc` runtime-simulation pattern used
-      throughout this project.
-- [ ] Process spawn/persistence tracking (`fork`/`clone`) — not started.
+      Tests: `tests/test_cli_smoke.py`'s
+      `test_ebpf_source_covers_all_hooked_events` (see below) is a
+      regression check (no `bcc` needed) that the C source and the
+      Python loader agree on all hooked syscalls; the handler itself
+      was verified with the same mocked-`bcc` runtime-simulation
+      pattern used throughout this project.
+- [x] Process spawn/persistence tracking (`fork`/`clone`) —
+      `ebpf/execve_trace.c`'s new `TRACEPOINT_PROBE(sched,
+      sched_process_fork)` reports every child process a monitored
+      process spawns (parent/child PID + comm), catching a script that
+      forks to persist/evade even if it never `execve()`s into a
+      different program. Uses the `sched:sched_process_fork`
+      tracepoint rather than a kprobe on `do_fork`/`_do_fork`/
+      `kernel_clone` — the internal function's name *and* argument
+      list have changed repeatedly across kernel versions, while
+      scheduler tracepoints are a stable, documented ABI. BCC
+      auto-attaches `TRACEPOINT_PROBE`-defined functions when the
+      program loads, so unlike the kprobes above, `load_bpf_program()`
+      needed no new `b.attach_*()` call.
+      `controller/bpf_loader.py`'s new `print_fork_event` is
+      **visibility-only, with no policy check** — there's no "allowed
+      to spawn children" concept in the policy schema (yet), so a fork
+      is always just reported, the same way `execve` events always
+      have been. Documented as a known limitation in `README.md`.
+- [x] Regression test tying it together: `tests/test_cli_smoke.py`'s
+      `test_ebpf_source_covers_all_hooked_events` (renamed from
+      `..._all_four_hooked_syscalls`) now checks all five hooked
+      events/syscalls across both the C source and the Python loader
+      in one place, so a future syscall addition that forgets to wire
+      up one side fails loudly.
 - [ ] A dedicated filesystem policy action for deletion (separate from
-      `allow_write`) if the shared-flag simplification above turns out
-      to be too coarse in practice — not started.
+      `allow_write`) if the shared-flag simplification for `unlinkat()`
+      turns out to be too coarse in practice — not started.
+- [ ] A policy concept for process spawning (e.g. "deny fork entirely"
+      or an allow-list of comms a script may spawn) — not started;
+      fork tracking above is visibility-only until this exists.
 
 ## Environment note (applies to every week above)
 

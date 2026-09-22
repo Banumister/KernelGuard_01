@@ -162,3 +162,47 @@ int trace_unlink(struct pt_regs *ctx, int dfd, const char __user *pathname, int 
     unlink_events.perf_submit(ctx, &data, sizeof(data));
     return 0;
 }
+
+/* --- fork()/clone() tracking (Week 5: process spawn / persistence) ---
+ *
+ * Uses the sched:sched_process_fork tracepoint instead of a kprobe on
+ * an internal kernel function (do_fork / _do_fork / kernel_clone --
+ * the name AND argument list has changed multiple times across kernel
+ * versions) since scheduler tracepoints are a documented, stable ABI.
+ * A spawned child process shows up here as it's created, before it
+ * necessarily execve()s into anything -- useful for catching a script
+ * that forks to persist/evade rather than exec-ing a new program.
+ *
+ * TRACEPOINT_PROBE(category, event) is BCC's macro form for this; the
+ * Python side auto-attaches any tracepoint__category__event function
+ * it finds when the program is loaded, so unlike the kprobes above
+ * there's no explicit b.attach_*() call needed in bpf_loader.py.
+ */
+
+struct fork_data_t {
+    u32  parent_pid;
+    u32  child_pid;
+    char parent_comm[TASK_COMM_LEN];
+    char child_comm[TASK_COMM_LEN];
+};
+
+BPF_PERF_OUTPUT(fork_events);
+
+TRACEPOINT_PROBE(sched, sched_process_fork) {
+    u32 parent_pid = args->parent_pid;
+
+    u8 *blocked = blocked_pids.lookup(&parent_pid);
+    if (blocked != 0) {
+        bpf_send_signal(9);
+        return 0;
+    }
+
+    struct fork_data_t data = {};
+    data.parent_pid = parent_pid;
+    data.child_pid = args->child_pid;
+    bpf_probe_read_kernel_str(&data.parent_comm, sizeof(data.parent_comm), args->parent_comm);
+    bpf_probe_read_kernel_str(&data.child_comm, sizeof(data.child_comm), args->child_comm);
+
+    fork_events.perf_submit(args, &data, sizeof(data));
+    return 0;
+}

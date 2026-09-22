@@ -15,11 +15,12 @@ bypassed.
 KernelGuard uses Python's `bcc` (BPF Compiler Collection) library to write
 eBPF programs directly into the Linux kernel. Instead of restricting
 Python from *within* Python, KernelGuard operates at "Ring 0" (kernel
-space): it intercepts raw syscalls (`execve`, `tcp_connect`, `vfs_write`,
-`unlinkat`) made by specific Python processes. If a script tries to open
-a network socket, write a file, or delete a file outside its policy,
-KernelGuard can log it or actively kill the process, depending on the
-flags you pass.
+space): it intercepts raw syscalls and scheduler events (`execve`,
+`tcp_connect`, `vfs_write`, `unlinkat`, process `fork`/`clone`) made by
+specific Python processes. If a script tries to open a network socket,
+write a file, delete a file, or spawn a child process, KernelGuard can
+log it, and for network/filesystem policy violations, actively kill the
+process depending on the flags you pass.
 
 > **Note:** automatic blocking on a policy violation is opt-in, not the
 > default — see [Known limitations](#known-limitations--current-scope)
@@ -28,7 +29,7 @@ flags you pass.
 ## Project structure
 kernelguard/
 ├── ebpf/
-│ └── execve_trace.c # eBPF hooks: execve, tcp_connect, vfs_write, unlinkat, active blocking
+│ └── execve_trace.c # eBPF hooks: execve, tcp_connect, vfs_write, unlinkat, fork/clone, active blocking
 ├── controller/
 │ ├── init.py
 │ └── bpf_loader.py # Compiles/loads eBPF, PID filtering, policy tagging, --enforce-network/--enforce-write/--block
@@ -142,8 +143,9 @@ pytest
 ## Key modules
 
 - **eBPF C-code** — low-level programs hooking `execve`, `tcp_connect`,
-  `vfs_write`, and `unlinkat` (file deletion) directly in the kernel,
-  plus a `blocked_pids` map for active enforcement.
+  `vfs_write`, `unlinkat` (file deletion), and the `sched_process_fork`
+  tracepoint (process spawn) directly in the kernel, plus a
+  `blocked_pids` map for active enforcement.
 - **Python BPF Controller (`bcc`)** — compiles and loads the eBPF code,
   manages PID filtering, policy evaluation, and enforcement.
 - **Policy engine** — JSON-defined allow-lists for network and filesystem
@@ -172,6 +174,11 @@ detail in [docs/ROADMAP.md](docs/ROADMAP.md)):
   `filesystem.allow_write` prefix list as writes, and gated by the same
   `--enforce-write`/`--block-write` flag — there's no dedicated
   "allow_delete" rule or flag yet.
+- **Process spawn tracking is visibility-only, with no policy at all.**
+  A `fork`/`clone` event is always just reported (like `execve` events
+  always were) — there's no "allowed to spawn children" concept in the
+  policy schema yet, so it can never be tagged `[ALLOWED]`/`[BLOCKED]`
+  or auto-enforced.
 - **Requires a real Linux kernel with BCC.** Nothing in this project can
   load or run on Windows, macOS, or most restricted cloud sandboxes —
   BCC needs to compile against a kernel-headers package matching

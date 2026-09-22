@@ -57,22 +57,25 @@ def test_ebpf_source_file_exists():
     assert "execve" in text.lower()
 
 
-def test_ebpf_source_covers_all_four_hooked_syscalls():
-    # Regression check for the syscalls this project claims to watch
-    # (see README's "Key modules" section) -- doesn't need bcc, just
-    # confirms the C source and the Python side agree on what's hooked.
+def test_ebpf_source_covers_all_hooked_events():
+    # Regression check for the syscalls/events this project claims to
+    # watch (see README's "Key modules" section) -- doesn't need bcc,
+    # just confirms the C source and the Python side agree on what's
+    # hooked.
     ebpf_source = (REPO_ROOT / "ebpf" / "execve_trace.c").read_text()
     for probe_fn, perf_map in [
         ("trace_execve", "events"),
         ("trace_connect_entry", "tcp_events"),
         ("trace_vfs_write", "write_events"),
         ("trace_unlink", "unlink_events"),
+        ("sched_process_fork", "fork_events"),
     ]:
         assert probe_fn in ebpf_source, f"missing eBPF probe function: {probe_fn}"
         assert perf_map in ebpf_source, f"missing eBPF perf output map: {perf_map}"
 
     loader_source = (REPO_ROOT / "controller" / "bpf_loader.py").read_text()
-    for name in ("print_event", "print_tcp_event", "print_write_event", "print_unlink_event"):
+    for name in ("print_event", "print_tcp_event", "print_write_event",
+                 "print_unlink_event", "print_fork_event"):
         assert name in loader_source, f"missing bpf_loader.py handler: {name}"
 
 
