@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
 KernelGuard demo-mode runner — simplified, plain-language output for
-showing Week 1 / Week 2 behavior live in a terminal (e.g. VS Code's
-integrated terminal) when a real Linux+BCC environment isn't available.
+showing Week 1 / Week 2 / Week 5 behavior live in a terminal (e.g. VS
+Code's integrated terminal) when a real Linux+BCC environment isn't
+available.
 
 WHAT'S REAL vs SIMULATED:
-- Real: the child-process launch, the actual file write, and every
-  ALLOWED/BLOCKED decision — those call this repo's real
-  policy/policy_loader.py against the real policy/policy_schema.json.
+- Real: the child-process launches (Week 1's exec, Week 5's fork demo),
+  the actual file write/delete, and every ALLOWED/BLOCKED decision —
+  those call this repo's real policy/policy_loader.py against the real
+  policy/policy_schema.json.
 - Simulated: the kernel-side capture of execve()/tcp_connect()/
-  vfs_write(). Loading an eBPF program requires a Linux kernel with root
-  access and a matching kernel-headers package for BCC to compile
-  against (see README.md > Requirements) — not available on this
-  machine. The two blocked actions (a disallowed connect, a disallowed
-  write) are described but not actually attempted.
+  vfs_write()/unlinkat()/fork(). Loading an eBPF program requires a
+  Linux kernel with root access and a matching kernel-headers package
+  for BCC to compile against (see README.md > Requirements) — not
+  available on this machine. The blocked actions (a disallowed connect,
+  a disallowed write, a disallowed delete) are described but not
+  actually attempted.
 
 Run the real tracer (controller/bpf_loader.py) on a Linux box with BCC
 installed for a genuine live capture.
@@ -38,6 +41,7 @@ RESET = "\033[0m"
 
 DEMO_PID_1 = 48213
 DEMO_PID_2 = 48311
+DEMO_PID_3 = 48412
 
 
 def pause(seconds=0.7):
@@ -173,7 +177,83 @@ def week2():
     print()
 
 
+def week5():
+    header("WEEK 5 DEMO — Watching file deletions and new child processes")
+
+    policy_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "policy", "policy_schema.json",
+    )
+    policy = load_policy(policy_path)
+
+    step("I start a script through KernelGuard, same rule file as before.")
+    print(f"   Script: demo_week5.py")
+    print(f"   KernelGuard gave it Process ID: {DEMO_PID_3}")
+
+    print(f"{DIM}   [demo mode: kernel-level watching is played out with realistic "
+          f"timing; every rule check below is real, using this repo's own code.]{RESET}")
+
+    step("The script deletes a file it created earlier, inside the allowed folder (/tmp/).")
+    tmp_target = os.path.join(
+        "/tmp" if os.name != "nt" else os.environ.get("TEMP", "."),
+        "kernelguard_demo_scratch.txt",
+    )
+    with open(tmp_target, "wb") as f:
+        f.write(b"temporary scratch file\n")
+    os.remove(tmp_target)
+    allowed = is_path_allowed(policy, "/tmp/kernelguard_demo_scratch.txt")
+    detected(
+        "a file deletion",
+        [
+            ("From Process ID", DEMO_PID_3),
+            ("File name", "kernelguard_demo_scratch.txt"),
+        ],
+        allowed=allowed,
+    )
+
+    step("The script tries to delete a file in a restricted folder (/etc/). Not actually done.")
+    allowed = is_path_allowed(policy, "/etc/kernelguard_test")
+    detected(
+        "a file deletion",
+        [
+            ("From Process ID", DEMO_PID_3),
+            ("File name", "kernelguard_test"),
+        ],
+        allowed=allowed,
+    )
+
+    step("The script spawns a child process — this is a real, separate process, "
+         "not simulated.")
+    if os.name == "nt":
+        child = subprocess.Popen(
+            ["cmd", "/c", "ver"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        child_comm = "cmd.exe"
+    else:
+        child = subprocess.Popen(["true"])
+        child_comm = "true"
+    child.wait()
+    detected(
+        "a new child process",
+        [
+            ("Parent Process ID", DEMO_PID_3),
+            ("Child Process ID", child.pid),
+            ("Child program", child_comm),
+        ],
+    )
+    print(f"{DIM}   Note: process-spawn watching has no rule check yet (see README's "
+          f"Known limitations) -- it's always just reported, never ALLOWED/BLOCKED, "
+          f"the same way new-program starts were in Week 1.{RESET}")
+    print()
+
+    pause(0.5)
+    print("Step: Watching stopped (Ctrl+C).")
+    print()
+
+
 if __name__ == "__main__":
     week1()
     pause(1.0)
     week2()
+    pause(1.0)
+    week5()
