@@ -77,11 +77,19 @@ sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.j
 ```
 
 Actively enforce the policy — kill the process the moment it triggers a
-blocked network connection and/or file write:
+blocked network connection, file write, and/or file deletion:
 
 ```bash
-sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.json --enforce-network --enforce-write
-# --enforce is shorthand for both flags together
+sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.json --enforce-network --enforce-write --enforce-delete
+# --enforce is shorthand for all three flags together
+```
+
+Deletion is checked against its own `filesystem.allow_delete` list, so a
+policy can grant write access to a path without also granting delete
+access to it:
+
+```bash
+sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.json --enforce-delete
 ```
 
 Actively terminate a process unconditionally on its next monitored syscall:
@@ -98,7 +106,7 @@ tracer in one step — no second terminal needed:
 sudo python3 cli/kernelguard.py run untrusted.py --policy policy/policy_schema.json
 
 # actively enforced
-sudo python3 cli/kernelguard.py run untrusted.py --block-network --block-write --policy policy/policy_schema.json
+sudo python3 cli/kernelguard.py run untrusted.py --block-network --block-write --block-delete --policy policy/policy_schema.json
 ```
 
 ## Running as a daemon
@@ -148,8 +156,10 @@ pytest
   `blocked_pids` map for active enforcement.
 - **Python BPF Controller (`bcc`)** — compiles and loads the eBPF code,
   manages PID filtering, policy evaluation, and enforcement.
-- **Policy engine** — JSON-defined allow-lists for network and filesystem
-  access.
+- **Policy engine** — JSON-defined allow-lists for network access and,
+  independently, for filesystem writes (`allow_write`) and filesystem
+  deletes (`allow_delete`) — a path can be writable without also being
+  deletable, or vice versa.
 - **Security CLI** — `kernelguard run untrusted.py --block-network`,
   which auto-attaches the tracer for you.
 
@@ -161,19 +171,15 @@ detail in [docs/ROADMAP.md](docs/ROADMAP.md)):
 - **Enforcement is opt-in, not default.** `--policy` alone (on either
   `bpf_loader.py` or `cli/kernelguard.py run`) stays visibility-only —
   events get tagged `[ALLOWED]`/`[BLOCKED]` but nothing is killed. You
-  have to explicitly add `--enforce`/`--enforce-network`/`--enforce-write`
-  (loader) or `--block-network`/`--block-write` (CLI) to turn a
-  `[BLOCKED]` tag into an actual `SIGKILL`.
+  have to explicitly add
+  `--enforce`/`--enforce-network`/`--enforce-write`/`--enforce-delete`
+  (loader) or `--block-network`/`--block-write`/`--block-delete` (CLI)
+  to turn a `[BLOCKED]` tag into an actual `SIGKILL`.
 - **Daemon mode is functional but not battle-tested.** `scripts/install.sh`
   + `systemd/kernelguard.service` run KernelGuard persistently, with
   `systemctl reload` for a no-downtime policy update and `--log-file`
   for a rotating on-disk event log. It hasn't been run under sustained
   real-world load yet, so treat it as new rather than hardened.
-- **File deletion shares the write policy, not a separate one.** A
-  blocked `unlinkat()` (deleting a file) is evaluated against the same
-  `filesystem.allow_write` prefix list as writes, and gated by the same
-  `--enforce-write`/`--block-write` flag — there's no dedicated
-  "allow_delete" rule or flag yet.
 - **Process spawn tracking is visibility-only, with no policy at all.**
   A `fork`/`clone` event is always just reported (like `execve` events
   always were) — there's no "allowed to spawn children" concept in the

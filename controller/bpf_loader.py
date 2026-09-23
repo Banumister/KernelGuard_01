@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"
 ))
 from policy_loader import (
-    load_policy, is_ip_allowed, is_path_allowed, should_enforce, reload_policy,
+    load_policy, is_ip_allowed, is_path_allowed, is_delete_allowed,
+    should_enforce, reload_policy,
 )
 
 BPF_SOURCE_FILE = os.path.join(
@@ -41,6 +42,7 @@ POLICY = None
 POLICY_PATH = None
 ENFORCE_NETWORK = False
 ENFORCE_WRITE = False
+ENFORCE_DELETE = False
 EVENT_LOGGER = None
 
 
@@ -83,10 +85,10 @@ def parse_args():
     parser.add_argument("--enforce", action="store_true",
                          help="Combined with --policy: automatically block (kill) a PID "
                               "the next time it triggers ANY BLOCKED policy violation "
-                              "(network or filesystem). Shorthand for --enforce-network "
-                              "--enforce-write together. Without any --enforce* flag, "
-                              "--policy only tags and logs violations (visibility only). "
-                              "Requires --policy.")
+                              "(network, write, or delete). Shorthand for --enforce-network "
+                              "--enforce-write --enforce-delete together. Without any "
+                              "--enforce* flag, --policy only tags and logs violations "
+                              "(visibility only). Requires --policy.")
     parser.add_argument("--enforce-network", action="store_true",
                          help="Combined with --policy: automatically block (kill) a PID "
                               "on its next BLOCKED network connection specifically. "
@@ -95,6 +97,11 @@ def parse_args():
                          help="Combined with --policy: automatically block (kill) a PID "
                               "on its next BLOCKED file write specifically. "
                               "Requires --policy.")
+    parser.add_argument("--enforce-delete", action="store_true",
+                         help="Combined with --policy: automatically block (kill) a PID "
+                              "on its next BLOCKED file deletion specifically. Checked "
+                              "against the policy's filesystem.allow_delete list, "
+                              "independent of allow_write. Requires --policy.")
     parser.add_argument("--block", action="store_true",
                          help="Actively block (kill) the target PID on its next monitored "
                               "syscall. Requires --pid.")
@@ -213,19 +220,17 @@ def print_unlink_event(cpu, data, size):
         return
     filename = event.filename.decode('utf-8', 'replace')
 
-    # Deletion is evaluated against the same filesystem policy as writes
-    # (allow_write is really "paths this script may modify", and
-    # deleting a file is a modification) and gated by the same
-    # --enforce-write / --block-write flag rather than a separate one,
-    # to keep the operator-facing flag set from growing per syscall.
+    # Deletion has its own allow_delete policy list and --enforce-delete
+    # / --block-delete flag, independent of writes: a policy can grant
+    # write access to a path without also granting delete access to it.
     status = ""
     if POLICY is not None:
-        allowed = is_path_allowed(POLICY, filename)
+        allowed = is_delete_allowed(POLICY, filename)
         if allowed:
             status = f"{GREEN}[ALLOWED]{RESET}"
         else:
             status = f"{RED}[BLOCKED - policy violation]{RESET}"
-            if should_enforce(POLICY, allowed, ENFORCE_WRITE):
+            if should_enforce(POLICY, allowed, ENFORCE_DELETE):
                 enforce_block(event.pid, f"deletion of {filename} violates policy")
     line = (f"PID={event.pid:<7} COMM={event.comm.decode('utf-8', 'replace'):<16} "
             f"DELETE -> {filename} {status}")
@@ -280,18 +285,21 @@ if __name__ == "__main__":
 
     ENFORCE_NETWORK = args.enforce or args.enforce_network
     ENFORCE_WRITE = args.enforce or args.enforce_write
-    if (ENFORCE_NETWORK or ENFORCE_WRITE) and not POLICY:
-        sys.exit("--enforce/--enforce-network/--enforce-write require --policy "
-                  "to know what to enforce against.")
+    ENFORCE_DELETE = args.enforce or args.enforce_delete
+    if (ENFORCE_NETWORK or ENFORCE_WRITE or ENFORCE_DELETE) and not POLICY:
+        sys.exit("--enforce/--enforce-network/--enforce-write/--enforce-delete require "
+                  "--policy to know what to enforce against.")
 
     b = load_bpf_program()
 
-    if ENFORCE_NETWORK or ENFORCE_WRITE:
+    if ENFORCE_NETWORK or ENFORCE_WRITE or ENFORCE_DELETE:
         parts = []
         if ENFORCE_NETWORK:
             parts.append("network")
         if ENFORCE_WRITE:
-            parts.append("filesystem")
+            parts.append("filesystem-write")
+        if ENFORCE_DELETE:
+            parts.append("filesystem-delete")
         print(f"{YELLOW}KernelGuard :: enforcement is ON for: {', '.join(parts)} — "
               f"policy violations in that category will be actively blocked, "
               f"not just logged.{RESET}")

@@ -126,7 +126,8 @@ what KernelGuard actually watches beyond the original three syscalls.
       deletions against the *same* `filesystem.allow_write` policy list
       and the same `--enforce-write`/`--block-write` flag as writes
       (documented as a known simplification in `README.md` — no
-      separate `allow_delete` rule or flag yet). This directly serves
+      separate `allow_delete` rule or flag yet, superseded by the
+      dedicated deletion policy item below). This directly serves
       the project's own ransomware/deletion threat model from the
       README's problem statement, which wasn't actually covered by any
       hook before this.
@@ -160,9 +161,31 @@ what KernelGuard actually watches beyond the original three syscalls.
       events/syscalls across both the C source and the Python loader
       in one place, so a future syscall addition that forgets to wire
       up one side fails loudly.
-- [ ] A dedicated filesystem policy action for deletion (separate from
-      `allow_write`) if the shared-flag simplification for `unlinkat()`
-      turns out to be too coarse in practice — not started.
+- [x] A dedicated filesystem policy action for deletion (separate from
+      `allow_write`) — `policy/policy_loader.py`'s new
+      `is_delete_allowed()` checks a new `filesystem.allow_delete` list
+      instead of reusing `allow_write`, so a policy can grant write
+      access to a path without also granting delete access to it (or
+      vice versa); falls back to the same `filesystem.default` as
+      writes when a path is on neither list. `controller/bpf_loader.py`'s
+      `print_unlink_event` now calls `is_delete_allowed()` instead of
+      `is_path_allowed()`, gated by its own new `--enforce-delete` flag
+      (independent of `--enforce-write`, and included in `--enforce`'s
+      shorthand alongside network+write). `cli/kernelguard.py run` gets
+      a matching `--block-delete` flag, translated to `--enforce-delete`
+      by `build_tracer_command()`. `policy/policy_schema.json`'s example
+      policy now has an `allow_delete` list alongside `allow_write`.
+      Tests: `tests/test_basic.py` covers `is_delete_allowed()` directly
+      — matches its own prefix, rejects paths outside it, and (the key
+      case) a path that's writable but *not* deletable under a
+      deliberately narrower `allow_delete` list, proving the two
+      permissions aren't aliases of each other. `tests/test_cli_smoke.py`
+      covers `build_tracer_command()`'s `--enforce-delete` translation,
+      the `--block-delete`-without-`--policy` fast-fail path, and the
+      auto-attach behavior via a monkeypatched `subprocess.Popen`. The
+      `print_unlink_event` change itself was verified with the same
+      mocked-`bcc` runtime-simulation pattern used throughout this
+      project.
 - [ ] A policy concept for process spawning (e.g. "deny fork entirely"
       or an allow-list of comms a script may spawn) — not started;
       fork tracking above is visibility-only until this exists.

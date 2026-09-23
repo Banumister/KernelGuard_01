@@ -11,6 +11,9 @@
     "default": "deny",
     "allow_write": [
       "/tmp/"
+    ],
+    "allow_delete": [
+      "/tmp/"
     ]
   }
 }

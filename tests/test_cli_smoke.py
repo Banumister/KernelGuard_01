@@ -105,6 +105,22 @@ def test_build_tracer_command_network_only():
     assert "--enforce-write" not in cmd
 
 
+def test_build_tracer_command_delete_only():
+    cli = _load_module("kernelguard_cli_btc_del", "cli/kernelguard.py")
+    cmd = cli.build_tracer_command(123, "policy/policy_schema.json", False, False, True)
+    assert "--enforce-delete" in cmd
+    assert "--enforce-network" not in cmd
+    assert "--enforce-write" not in cmd
+
+
+def test_build_tracer_command_block_delete_defaults_to_false():
+    # Omitting block_delete (positional callers written before it
+    # existed) must not silently turn delete-enforcement on.
+    cli = _load_module("kernelguard_cli_btc_deldefault", "cli/kernelguard.py")
+    cmd = cli.build_tracer_command(123, "policy/policy_schema.json", False, False)
+    assert "--enforce-delete" not in cmd
+
+
 class _FakeProc:
     """Stands in for subprocess.Popen's return value in CLI tests, so
     tests never actually spawn controller/bpf_loader.py (which needs
@@ -147,6 +163,59 @@ def test_run_block_network_without_policy_exits_cleanly(tmp_path, monkeypatch, c
 
     captured = capsys.readouterr()
     assert "--policy" in captured.err
+
+
+def test_run_block_delete_without_policy_exits_cleanly(tmp_path, monkeypatch, capsys):
+    cli = _load_module("kernelguard_cli_blockdelerr", "cli/kernelguard.py")
+
+    def fail_popen(*a, **kw):
+        raise AssertionError("subprocess.Popen must not be called when validation fails")
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fail_popen)
+
+    script = tmp_path / "noop.py"
+    script.write_text("pass\n")
+    monkeypatch.setattr(sys, "argv", ["kernelguard", "run", str(script), "--block-delete"])
+
+    try:
+        cli.main()
+        assert False, "expected SystemExit"
+    except SystemExit as exc:
+        assert exc.code == 1
+
+    captured = capsys.readouterr()
+    assert "--policy" in captured.err
+
+
+def test_run_with_block_delete_autoattaches_enforcing_tracer(tmp_path, monkeypatch, capsys):
+    cli = _load_module("kernelguard_cli_autoattach_del", "cli/kernelguard.py")
+
+    calls = []
+
+    def fake_popen(cmd, *a, **kw):
+        calls.append(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+
+    script = tmp_path / "noop.py"
+    script.write_text("pass\n")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["kernelguard", "run", str(script), "--block-delete",
+         "--policy", "policy/policy_schema.json"],
+    )
+
+    cli.main()
+
+    assert len(calls) == 2
+    tracer_cmd = calls[1]
+    assert "--enforce-delete" in tracer_cmd
+    assert "--enforce-network" not in tracer_cmd
+    assert "--enforce-write" not in tracer_cmd
+
+    captured = capsys.readouterr()
+    assert "Attaching tracer (enforcing)" in captured.out
 
 
 def test_run_with_policy_autoattaches_tracer_in_visibility_mode(tmp_path, monkeypatch, capsys):

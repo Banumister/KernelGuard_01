@@ -2,18 +2,19 @@
 """
 KernelGuard Security CLI
 
-    kernelguard run <script.py> [--block-network] [--block-write] [--policy policy.json]
+    kernelguard run <script.py> [--block-network] [--block-write] [--block-delete] [--policy policy.json]
 
 `run` launches the target script and prints its PID. If --policy,
---block-network, or --block-write are given, it also automatically
-attaches controller/bpf_loader.py as the tracer (translating these
-CLI-level flags into bpf_loader.py's --enforce-network/--enforce-write),
-so a single `kernelguard run` invocation is enough — no second terminal
-needed. Without any of those flags, it falls back to printing manual
-attach instructions (useful for a plain execve()-only watch).
+--block-network, --block-write, or --block-delete are given, it also
+automatically attaches controller/bpf_loader.py as the tracer
+(translating these CLI-level flags into bpf_loader.py's
+--enforce-network/--enforce-write/--enforce-delete), so a single
+`kernelguard run` invocation is enough — no second terminal needed.
+Without any of those flags, it falls back to printing manual attach
+instructions (useful for a plain execve()-only watch).
 
---block-network and --block-write each require --policy, since there
-has to be a rule set to enforce against.
+--block-network, --block-write, and --block-delete each require
+--policy, since there has to be a rule set to enforce against.
 """
 import argparse
 import os
@@ -48,15 +49,22 @@ def build_parser():
              "Requires --policy.",
     )
     run_parser.add_argument(
+        "--block-delete",
+        action="store_true",
+        help="Automatically kill the script on its next BLOCKED file deletion. "
+             "Checked against the policy's filesystem.allow_delete list, "
+             "independent of allow_write. Requires --policy.",
+    )
+    run_parser.add_argument(
         "--policy", help="Path to a JSON policy file (see policy/). Without "
-                          "--block-network/--block-write, tags events allowed/blocked "
-                          "but doesn't kill anything (visibility only)."
+                          "--block-network/--block-write/--block-delete, tags events "
+                          "allowed/blocked but doesn't kill anything (visibility only)."
     )
 
     return parser
 
 
-def build_tracer_command(pid, policy, block_network, block_write):
+def build_tracer_command(pid, policy, block_network, block_write, block_delete=False):
     """Pure function: builds the controller/bpf_loader.py invocation for a
     given set of CLI flags. Kept separate from main() so it's testable
     without actually spawning a subprocess or needing bcc installed."""
@@ -67,6 +75,8 @@ def build_tracer_command(pid, policy, block_network, block_write):
         cmd.append("--enforce-network")
     if block_write:
         cmd.append("--enforce-write")
+    if block_delete:
+        cmd.append("--enforce-delete")
     return cmd
 
 
@@ -84,10 +94,10 @@ def main():
             )
             sys.exit(1)
 
-        if (args.block_network or args.block_write) and not args.policy:
+        if (args.block_network or args.block_write or args.block_delete) and not args.policy:
             print(
-                "[KernelGuard] ERROR: --block-network/--block-write require --policy "
-                "so there's a rule set to enforce against.",
+                "[KernelGuard] ERROR: --block-network/--block-write/--block-delete "
+                "require --policy so there's a rule set to enforce against.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -97,11 +107,12 @@ def main():
         print(f"[KernelGuard] Target PID={proc.pid}.")
 
         tracer_proc = None
-        if args.policy or args.block_network or args.block_write:
+        if args.policy or args.block_network or args.block_write or args.block_delete:
             tracer_cmd = build_tracer_command(
-                proc.pid, args.policy, args.block_network, args.block_write
+                proc.pid, args.policy, args.block_network, args.block_write, args.block_delete
             )
-            mode = "enforcing" if (args.block_network or args.block_write) else "visibility-only"
+            mode = ("enforcing" if (args.block_network or args.block_write or args.block_delete)
+                    else "visibility-only")
             print(f"[KernelGuard] Attaching tracer ({mode}):")
             print("    " + " ".join(tracer_cmd))
             tracer_proc = subprocess.Popen(tracer_cmd)

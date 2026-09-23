@@ -33,6 +33,24 @@ def is_path_allowed(policy, filepath):
     return False
 
 
+def is_delete_allowed(policy, filepath):
+    """Same shape as is_path_allowed(), but checks the filesystem
+    section's allow_delete list instead of allow_write -- a policy can
+    grant write access to a path without also granting delete access
+    to it (or vice versa). Deletion is arguably higher-risk than a
+    write (it's not undoable the way an unwanted write often is), so
+    it gets its own list rather than reusing allow_write. Falls back
+    to the same filesystem.default as writes when the path isn't on
+    either list."""
+    filesystem = policy.get("filesystem", {})
+    if filesystem.get("default") == "allow":
+        return True
+    for allowed_prefix in filesystem.get("allow_delete", []):
+        if filepath.startswith(allowed_prefix):
+            return True
+    return False
+
+
 def should_enforce(policy, allowed, enforce_enabled):
     """Decide whether a policy violation should trigger active blocking
     (killing the PID), as opposed to just being logged.

@@ -7,7 +7,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"))
 from policy_loader import (
-    load_policy, is_ip_allowed, is_path_allowed, should_enforce, reload_policy,
+    load_policy, is_ip_allowed, is_path_allowed, is_delete_allowed,
+    should_enforce, reload_policy,
 )
 
 
@@ -18,7 +19,11 @@ SAMPLE_POLICY = {
     },
     "filesystem": {
         "default": "deny",
-        "allow_write": ["/tmp/"]
+        "allow_write": ["/tmp/"],
+        # Deliberately narrower than allow_write, and a different
+        # subpath, so tests below can prove delete permission is
+        # independent of write permission rather than aliasing it.
+        "allow_delete": ["/tmp/scratch/"]
     }
 }
 
@@ -70,6 +75,23 @@ def test_default_allow_overrides_list():
     open_policy = {"network": {"default": "allow"}, "filesystem": {"default": "allow"}}
     assert is_ip_allowed(open_policy, "1.2.3.4", 80) is True
     assert is_path_allowed(open_policy, "/anything") is True
+    assert is_delete_allowed(open_policy, "/anything") is True
+
+
+def test_is_delete_allowed_matches_its_own_prefix():
+    assert is_delete_allowed(SAMPLE_POLICY, "/tmp/scratch/file.txt") is True
+
+
+def test_is_delete_allowed_rejects_outside_its_own_prefix():
+    assert is_delete_allowed(SAMPLE_POLICY, "/etc/passwd") is False
+
+
+def test_is_delete_allowed_is_independent_of_write_permission():
+    # /tmp/output.txt is writable (allow_write: ["/tmp/"]) but NOT
+    # deletable under SAMPLE_POLICY's narrower allow_delete list --
+    # write and delete permission must not be aliases of each other.
+    assert is_path_allowed(SAMPLE_POLICY, "/tmp/output.txt") is True
+    assert is_delete_allowed(SAMPLE_POLICY, "/tmp/output.txt") is False
 
 
 def test_should_enforce_true_when_enabled_policy_loaded_and_blocked():
