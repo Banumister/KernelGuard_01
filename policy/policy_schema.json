@@ -15,5 +15,11 @@
     "allow_delete": [
       "/tmp/"
     ]
+  },
+  "process": {
+    "default": "deny",
+    "allow": [
+      "python3"
+    ]
   }
 }

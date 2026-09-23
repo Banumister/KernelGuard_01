@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"))
 from policy_loader import (
     load_policy, is_ip_allowed, is_path_allowed, is_delete_allowed,
-    should_enforce, reload_policy,
+    is_spawn_allowed, should_enforce, reload_policy,
 )
 
 
@@ -92,6 +92,42 @@ def test_is_delete_allowed_is_independent_of_write_permission():
     # write and delete permission must not be aliases of each other.
     assert is_path_allowed(SAMPLE_POLICY, "/tmp/output.txt") is True
     assert is_delete_allowed(SAMPLE_POLICY, "/tmp/output.txt") is False
+
+
+SPAWN_POLICY = {
+    "process": {
+        "default": "deny",
+        "allow": ["python3"]
+    }
+}
+
+
+def test_is_spawn_allowed_returns_none_when_policy_predates_it():
+    # SAMPLE_POLICY has no "process" section at all -- a fork event
+    # under this policy must stay visibility-only (None), not silently
+    # become deny, so pre-existing policy files aren't retroactively
+    # changed by this feature shipping.
+    assert is_spawn_allowed(SAMPLE_POLICY, "bash") is None
+
+
+def test_is_spawn_allowed_matches_allow_list():
+    assert is_spawn_allowed(SPAWN_POLICY, "python3") is True
+
+
+def test_is_spawn_allowed_rejects_comm_not_on_allow_list():
+    assert is_spawn_allowed(SPAWN_POLICY, "bash") is False
+
+
+def test_is_spawn_allowed_default_allow_overrides_list():
+    open_policy = {"process": {"default": "allow"}}
+    assert is_spawn_allowed(open_policy, "anything") is True
+
+
+def test_is_spawn_allowed_matches_exactly_not_as_prefix():
+    # Unlike is_path_allowed()/is_delete_allowed(), comm matching is
+    # exact -- process names don't nest the way filesystem paths do, so
+    # "python3-intruder" must not match an allow list entry of "python3".
+    assert is_spawn_allowed(SPAWN_POLICY, "python3-intruder") is False
 
 
 def test_should_enforce_true_when_enabled_policy_loaded_and_blocked():

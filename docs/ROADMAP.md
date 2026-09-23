@@ -111,7 +111,7 @@ enforced. That's Week 3.
         simulation used throughout this project, since `bpf_loader.py`
         can't be imported without `bcc` installed.
 
-## Week 5 — Extended syscall coverage 🚧 in progress
+## Week 5 — Extended syscall coverage ✅ done
 
 Weeks 1–4 covered the original planned scope end-to-end (interception,
 visibility, enforcement, packaging/daemon). This week is new: widening
@@ -186,9 +186,55 @@ what KernelGuard actually watches beyond the original three syscalls.
       `print_unlink_event` change itself was verified with the same
       mocked-`bcc` runtime-simulation pattern used throughout this
       project.
-- [ ] A policy concept for process spawning (e.g. "deny fork entirely"
-      or an allow-list of comms a script may spawn) — not started;
-      fork tracking above is visibility-only until this exists.
+- [x] A policy concept for process spawning — `policy/policy_loader.py`'s
+      new `is_spawn_allowed()` checks a new `process` section
+      (`default` + an `allow` list of comm names, matched exactly, not
+      as a prefix — process names don't nest the way filesystem paths
+      do). Unlike `is_path_allowed()`/`is_delete_allowed()`, this one is
+      **tri-state**: it returns `None` when the policy has no `process`
+      section at all, rather than treating an absent section as
+      implicit deny. That matters because a policy file written before
+      this feature existed has no `process` key, and without the
+      tri-state, every fork under it would suddenly start getting
+      tagged/blocked the moment this shipped — `None` tells the caller
+      "this policy never opted in to spawn control, stay
+      visibility-only," the same opt-in posture `--enforce*`/`--block*`
+      flags already use elsewhere in this project.
+      `controller/bpf_loader.py`'s `print_fork_event` now calls
+      `is_spawn_allowed()`: `True`/`False` get tagged
+      `[ALLOWED]`/`[BLOCKED - policy violation]` on the fork line, and
+      only `False` (never `None`) is passed to `should_enforce()` —
+      `should_enforce()` treats any non-`True` value as a violation, so
+      passing `None` straight through would have incorrectly enforced
+      against policies that never asked for spawn control. A new
+      `--enforce-spawn` flag (loader) / `--block-spawn` flag (CLI) gates
+      actual killing, blocking the *child* PID specifically. Both are
+      deliberately **excluded** from `--enforce`'s shorthand — spawn
+      enforcement is judged riskier than network/write/delete
+      enforcement, since it's more likely to kill a legitimate child
+      that just hasn't been allow-listed yet, so it has to be opted
+      into on its own. `policy/policy_schema.json`'s example policy now
+      has a `process` section (`default: "deny"`, `allow: ["python3"]`).
+      `demo/kernelguard_demo.py`'s Week 5 fork step now shows both an
+      allowed spawn (`python3`, on the allow list) and a blocked one
+      (`nc`, not on it), instead of the old "no rule check yet" note.
+      Tests: `tests/test_basic.py` covers `is_spawn_allowed()` directly
+      — the tri-state `None` case (predates the feature), matching the
+      allow list, rejecting a comm not on it, `default: "allow"`
+      overriding the list, and exact-match-not-prefix matching.
+      `tests/test_cli_smoke.py` covers `build_tracer_command()`'s
+      `--enforce-spawn` translation, its default-`False` safety for old
+      call sites, the `--block-spawn`-without-`--policy` fast-fail
+      path, and the auto-attach behavior via a monkeypatched
+      `subprocess.Popen`. The `print_fork_event` change itself was
+      verified with the same mocked-`bcc` runtime-simulation pattern
+      used throughout this project, explicitly exercising the
+      `None`/`True`/`False` cases to prove `None` never reaches
+      `should_enforce()`.
+
+With this, Week 5 closes out both open items from the original scope
+widening: a dedicated deletion policy and a process-spawn policy,
+alongside the `unlinkat()`/`fork` tracing added earlier this week.
 
 ## Environment note (applies to every week above)
 

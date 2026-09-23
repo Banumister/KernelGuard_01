@@ -51,6 +51,34 @@ def is_delete_allowed(policy, filepath):
     return False
 
 
+def is_spawn_allowed(policy, comm):
+    """Tri-state, unlike is_path_allowed()/is_delete_allowed(): returns
+    None when the policy has no "process" section at all, True/False
+    once it does.
+
+    Existing policy files written before process-spawn policy existed
+    have no "process" key -- without this tri-state, they'd suddenly
+    start getting every fork tagged/blocked against an implicit
+    default-deny the moment this feature shipped, even though the
+    person who wrote that policy never had spawn behavior in mind. None
+    tells the caller "this policy doesn't opt in to spawn control, stay
+    visibility-only" -- the same opt-in posture --enforce*/--block* flags
+    already use elsewhere in this project. A caller MUST treat None as
+    "don't call should_enforce()" rather than as falsy/deny: should_enforce
+    treats any non-True value as a violation, so passing None straight
+    through would incorrectly enforce against policies that never asked
+    for spawn control at all.
+
+    comm is matched exactly (e.g. "python3", "sh"), not as a prefix --
+    process names don't nest the way filesystem paths do."""
+    if "process" not in policy:
+        return None
+    process = policy["process"]
+    if process.get("default") == "allow":
+        return True
+    return comm in process.get("allow", [])
+
+
 def should_enforce(policy, allowed, enforce_enabled):
     """Decide whether a policy violation should trigger active blocking
     (killing the PID), as opposed to just being logged.

@@ -2,19 +2,21 @@
 """
 KernelGuard Security CLI
 
-    kernelguard run <script.py> [--block-network] [--block-write] [--block-delete] [--policy policy.json]
+    kernelguard run <script.py> [--block-network] [--block-write] [--block-delete] [--block-spawn] [--policy policy.json]
 
 `run` launches the target script and prints its PID. If --policy,
---block-network, --block-write, or --block-delete are given, it also
-automatically attaches controller/bpf_loader.py as the tracer
-(translating these CLI-level flags into bpf_loader.py's
---enforce-network/--enforce-write/--enforce-delete), so a single
-`kernelguard run` invocation is enough — no second terminal needed.
-Without any of those flags, it falls back to printing manual attach
-instructions (useful for a plain execve()-only watch).
+--block-network, --block-write, --block-delete, or --block-spawn are
+given, it also automatically attaches controller/bpf_loader.py as the
+tracer (translating these CLI-level flags into bpf_loader.py's
+--enforce-network/--enforce-write/--enforce-delete/--enforce-spawn), so
+a single `kernelguard run` invocation is enough — no second terminal
+needed. Without any of those flags, it falls back to printing manual
+attach instructions (useful for a plain execve()-only watch).
 
---block-network, --block-write, and --block-delete each require
---policy, since there has to be a rule set to enforce against.
+--block-network, --block-write, --block-delete, and --block-spawn each
+require --policy, since there has to be a rule set to enforce against.
+--block-spawn is checked against the policy's process.allow list, which
+is opt-in per policy file — see bpf_loader.py's --enforce-spawn help.
 """
 import argparse
 import os
@@ -56,15 +58,25 @@ def build_parser():
              "independent of allow_write. Requires --policy.",
     )
     run_parser.add_argument(
+        "--block-spawn",
+        action="store_true",
+        help="Automatically kill a newly spawned CHILD process if its comm isn't "
+             "on the policy's process.allow list. Only takes effect if the policy "
+             "file has a \"process\" section at all -- a policy without one leaves "
+             "spawn tracking visibility-only. Requires --policy.",
+    )
+    run_parser.add_argument(
         "--policy", help="Path to a JSON policy file (see policy/). Without "
-                          "--block-network/--block-write/--block-delete, tags events "
-                          "allowed/blocked but doesn't kill anything (visibility only)."
+                          "--block-network/--block-write/--block-delete/--block-spawn, "
+                          "tags events allowed/blocked but doesn't kill anything "
+                          "(visibility only)."
     )
 
     return parser
 
 
-def build_tracer_command(pid, policy, block_network, block_write, block_delete=False):
+def build_tracer_command(pid, policy, block_network, block_write, block_delete=False,
+                          block_spawn=False):
     """Pure function: builds the controller/bpf_loader.py invocation for a
     given set of CLI flags. Kept separate from main() so it's testable
     without actually spawning a subprocess or needing bcc installed."""
@@ -77,6 +89,8 @@ def build_tracer_command(pid, policy, block_network, block_write, block_delete=F
         cmd.append("--enforce-write")
     if block_delete:
         cmd.append("--enforce-delete")
+    if block_spawn:
+        cmd.append("--enforce-spawn")
     return cmd
 
 
@@ -94,10 +108,11 @@ def main():
             )
             sys.exit(1)
 
-        if (args.block_network or args.block_write or args.block_delete) and not args.policy:
+        if (args.block_network or args.block_write or args.block_delete
+                or args.block_spawn) and not args.policy:
             print(
-                "[KernelGuard] ERROR: --block-network/--block-write/--block-delete "
-                "require --policy so there's a rule set to enforce against.",
+                "[KernelGuard] ERROR: --block-network/--block-write/--block-delete/"
+                "--block-spawn require --policy so there's a rule set to enforce against.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -107,11 +122,14 @@ def main():
         print(f"[KernelGuard] Target PID={proc.pid}.")
 
         tracer_proc = None
-        if args.policy or args.block_network or args.block_write or args.block_delete:
+        if (args.policy or args.block_network or args.block_write or args.block_delete
+                or args.block_spawn):
             tracer_cmd = build_tracer_command(
-                proc.pid, args.policy, args.block_network, args.block_write, args.block_delete
+                proc.pid, args.policy, args.block_network, args.block_write,
+                args.block_delete, args.block_spawn
             )
-            mode = ("enforcing" if (args.block_network or args.block_write or args.block_delete)
+            mode = ("enforcing" if (args.block_network or args.block_write
+                                     or args.block_delete or args.block_spawn)
                     else "visibility-only")
             print(f"[KernelGuard] Attaching tracer ({mode}):")
             print("    " + " ".join(tracer_cmd))

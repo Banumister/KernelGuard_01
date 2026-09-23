@@ -31,7 +31,7 @@ import time
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"
 ))
-from policy_loader import load_policy, is_ip_allowed, is_path_allowed  # noqa: E402
+from policy_loader import load_policy, is_ip_allowed, is_path_allowed, is_spawn_allowed  # noqa: E402
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -222,17 +222,17 @@ def week5():
         allowed=allowed,
     )
 
-    step("The script spawns a child process — this is a real, separate process, "
-         "not simulated.")
+    step("The script spawns a child process that's on the allow list "
+         "(\"python3\") — this is a real, separate process, not simulated.")
     if os.name == "nt":
         child = subprocess.Popen(
-            ["cmd", "/c", "ver"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            [sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        child_comm = "cmd.exe"
     else:
-        child = subprocess.Popen(["true"])
-        child_comm = "true"
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child_comm = "python3"
     child.wait()
+    allowed = is_spawn_allowed(policy, child_comm)
     detected(
         "a new child process",
         [
@@ -240,10 +240,22 @@ def week5():
             ("Child Process ID", child.pid),
             ("Child program", child_comm),
         ],
+        allowed=allowed,
     )
-    print(f"{DIM}   Note: process-spawn watching has no rule check yet (see README's "
-          f"Known limitations) -- it's always just reported, never ALLOWED/BLOCKED, "
-          f"the same way new-program starts were in Week 1.{RESET}")
+
+    step("The script spawns a second child process that's NOT on the allow "
+         "list. Not actually done.")
+    child_comm = "nc"
+    allowed = is_spawn_allowed(policy, child_comm)
+    detected(
+        "a new child process",
+        [
+            ("Parent Process ID", DEMO_PID_3),
+            ("Child Process ID", "(not spawned)"),
+            ("Child program", child_comm),
+        ],
+        allowed=allowed,
+    )
     print()
 
     pause(0.5)

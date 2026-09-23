@@ -92,6 +92,17 @@ access to it:
 sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.json --enforce-delete
 ```
 
+Enforce which child processes a script is allowed to spawn, against the
+policy's `process.allow` list — deliberately **not** included in
+`--enforce`'s shorthand (a policy without a `process` section stays
+visibility-only, and even with one, killing a legitimate but
+not-yet-allow-listed child is a real risk, so this one is opt-in on its
+own):
+
+```bash
+sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.json --enforce-spawn
+```
+
 Actively terminate a process unconditionally on its next monitored syscall:
 
 ```bash
@@ -106,7 +117,7 @@ tracer in one step — no second terminal needed:
 sudo python3 cli/kernelguard.py run untrusted.py --policy policy/policy_schema.json
 
 # actively enforced
-sudo python3 cli/kernelguard.py run untrusted.py --block-network --block-write --block-delete --policy policy/policy_schema.json
+sudo python3 cli/kernelguard.py run untrusted.py --block-network --block-write --block-delete --block-spawn --policy policy/policy_schema.json
 ```
 
 ## Running as a daemon
@@ -156,10 +167,11 @@ pytest
   `blocked_pids` map for active enforcement.
 - **Python BPF Controller (`bcc`)** — compiles and loads the eBPF code,
   manages PID filtering, policy evaluation, and enforcement.
-- **Policy engine** — JSON-defined allow-lists for network access and,
-  independently, for filesystem writes (`allow_write`) and filesystem
+- **Policy engine** — JSON-defined allow-lists for network access,
+  independently for filesystem writes (`allow_write`) and filesystem
   deletes (`allow_delete`) — a path can be writable without also being
-  deletable, or vice versa.
+  deletable, or vice versa — and, opt-in per policy file, for which
+  process names (`process.allow`) a script may spawn as children.
 - **Security CLI** — `kernelguard run untrusted.py --block-network`,
   which auto-attaches the tracer for you.
 
@@ -172,19 +184,27 @@ detail in [docs/ROADMAP.md](docs/ROADMAP.md)):
   `bpf_loader.py` or `cli/kernelguard.py run`) stays visibility-only —
   events get tagged `[ALLOWED]`/`[BLOCKED]` but nothing is killed. You
   have to explicitly add
-  `--enforce`/`--enforce-network`/`--enforce-write`/`--enforce-delete`
-  (loader) or `--block-network`/`--block-write`/`--block-delete` (CLI)
-  to turn a `[BLOCKED]` tag into an actual `SIGKILL`.
+  `--enforce`/`--enforce-network`/`--enforce-write`/`--enforce-delete`/`--enforce-spawn`
+  (loader) or `--block-network`/`--block-write`/`--block-delete`/`--block-spawn`
+  (CLI) to turn a `[BLOCKED]` tag into an actual `SIGKILL`.
+  `--enforce-spawn`/`--block-spawn` are deliberately excluded from
+  `--enforce`'s shorthand — see the next bullet.
+- **Process spawn policy is opt-in per policy file, and never bundled
+  into `--enforce`.** A policy file needs its own `process` section
+  (`default` + an `allow` list of comm names) before fork events get
+  tagged `[ALLOWED]`/`[BLOCKED]` at all — a policy written before this
+  existed has no `process` section, so its forks stay visibility-only
+  exactly as before, never silently deny-by-default. Even once a policy
+  opts in, `--enforce-spawn`/`--block-spawn` has to be requested
+  explicitly (not folded into `--enforce`), since killing a spawned
+  child is more likely to break a legitimate script that just hasn't
+  had its children allow-listed yet than a blocked network call or
+  write would be.
 - **Daemon mode is functional but not battle-tested.** `scripts/install.sh`
   + `systemd/kernelguard.service` run KernelGuard persistently, with
   `systemctl reload` for a no-downtime policy update and `--log-file`
   for a rotating on-disk event log. It hasn't been run under sustained
   real-world load yet, so treat it as new rather than hardened.
-- **Process spawn tracking is visibility-only, with no policy at all.**
-  A `fork`/`clone` event is always just reported (like `execve` events
-  always were) — there's no "allowed to spawn children" concept in the
-  policy schema yet, so it can never be tagged `[ALLOWED]`/`[BLOCKED]`
-  or auto-enforced.
 - **Requires a real Linux kernel with BCC.** Nothing in this project can
   load or run on Windows, macOS, or most restricted cloud sandboxes —
   BCC needs to compile against a kernel-headers package matching

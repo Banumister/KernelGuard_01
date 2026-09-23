@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(
 ))
 from policy_loader import (
     load_policy, is_ip_allowed, is_path_allowed, is_delete_allowed,
-    should_enforce, reload_policy,
+    is_spawn_allowed, should_enforce, reload_policy,
 )
 
 BPF_SOURCE_FILE = os.path.join(
@@ -43,6 +43,7 @@ POLICY_PATH = None
 ENFORCE_NETWORK = False
 ENFORCE_WRITE = False
 ENFORCE_DELETE = False
+ENFORCE_SPAWN = False
 EVENT_LOGGER = None
 
 
@@ -102,6 +103,18 @@ def parse_args():
                               "on its next BLOCKED file deletion specifically. Checked "
                               "against the policy's filesystem.allow_delete list, "
                               "independent of allow_write. Requires --policy.")
+    parser.add_argument("--enforce-spawn", action="store_true",
+                         help="Combined with --policy: automatically block (kill) a newly "
+                              "spawned CHILD process on its next monitored syscall if its "
+                              "comm isn't on the policy's process.allow list. Checked "
+                              "against the policy's process section, which is tri-state: a "
+                              "policy with no process section at all leaves spawn tracking "
+                              "visibility-only, same as before this flag existed. NOT "
+                              "included in --enforce's shorthand (unlike "
+                              "--enforce-network/--enforce-write/--enforce-delete) -- "
+                              "spawn enforcement is riskier, since it can kill a legitimate "
+                              "child that just hasn't been allow-listed yet, so it has to "
+                              "be opted into explicitly. Requires --policy.")
     parser.add_argument("--block", action="store_true",
                          help="Actively block (kill) the target PID on its next monitored "
                               "syscall. Requires --pid.")
@@ -239,17 +252,31 @@ def print_unlink_event(cpu, data, size):
 
 
 def print_fork_event(cpu, data, size):
-    # Visibility only, like print_event (execve) -- there's no
-    # "allowed to fork" concept in the current policy schema, so this
-    # reports every spawn rather than tagging ALLOWED/BLOCKED. A
-    # process forking to persist/evade shows up here even if it never
-    # execve()s into a different program.
     event = b["fork_events"].event(data)
     if TARGET_PID is not None and event.parent_pid != TARGET_PID:
         return
+    child_comm = event.child_comm.decode('utf-8', 'replace')
+
+    # is_spawn_allowed() is tri-state: None means this policy has no
+    # "process" section at all, so we stay visibility-only exactly like
+    # before spawn policy existed -- a policy written before this
+    # feature shipped must not suddenly start getting every fork tagged
+    # or blocked. Only True/False get a [ALLOWED]/[BLOCKED] tag, and
+    # only False is ever passed to should_enforce() -- None must never
+    # reach it, since should_enforce() treats any non-True value as a
+    # violation.
+    status = ""
+    if POLICY is not None:
+        allowed = is_spawn_allowed(POLICY, child_comm)
+        if allowed is True:
+            status = f"{GREEN}[ALLOWED]{RESET}"
+        elif allowed is False:
+            status = f"{RED}[BLOCKED - policy violation]{RESET}"
+            if should_enforce(POLICY, allowed, ENFORCE_SPAWN):
+                enforce_block(event.child_pid, f"spawn of {child_comm} violates policy")
     line = (f"PID={event.parent_pid:<7} COMM={event.parent_comm.decode('utf-8', 'replace'):<16} "
             f"FORK -> PID={event.child_pid:<7} "
-            f"COMM={event.child_comm.decode('utf-8', 'replace')}")
+            f"COMM={child_comm} {status}")
     print(line)
     log_event(line)
 
@@ -286,13 +313,16 @@ if __name__ == "__main__":
     ENFORCE_NETWORK = args.enforce or args.enforce_network
     ENFORCE_WRITE = args.enforce or args.enforce_write
     ENFORCE_DELETE = args.enforce or args.enforce_delete
-    if (ENFORCE_NETWORK or ENFORCE_WRITE or ENFORCE_DELETE) and not POLICY:
-        sys.exit("--enforce/--enforce-network/--enforce-write/--enforce-delete require "
-                  "--policy to know what to enforce against.")
+    # Deliberately NOT included in --enforce's shorthand -- see
+    # --enforce-spawn's help text for why.
+    ENFORCE_SPAWN = args.enforce_spawn
+    if (ENFORCE_NETWORK or ENFORCE_WRITE or ENFORCE_DELETE or ENFORCE_SPAWN) and not POLICY:
+        sys.exit("--enforce/--enforce-network/--enforce-write/--enforce-delete/"
+                  "--enforce-spawn require --policy to know what to enforce against.")
 
     b = load_bpf_program()
 
-    if ENFORCE_NETWORK or ENFORCE_WRITE or ENFORCE_DELETE:
+    if ENFORCE_NETWORK or ENFORCE_WRITE or ENFORCE_DELETE or ENFORCE_SPAWN:
         parts = []
         if ENFORCE_NETWORK:
             parts.append("network")
@@ -300,6 +330,8 @@ if __name__ == "__main__":
             parts.append("filesystem-write")
         if ENFORCE_DELETE:
             parts.append("filesystem-delete")
+        if ENFORCE_SPAWN:
+            parts.append("process-spawn")
         print(f"{YELLOW}KernelGuard :: enforcement is ON for: {', '.join(parts)} — "
               f"policy violations in that category will be actively blocked, "
               f"not just logged.{RESET}")
