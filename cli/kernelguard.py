@@ -17,6 +17,14 @@ attach instructions (useful for a plain execve()-only watch).
 require --policy, since there has to be a rule set to enforce against.
 --block-spawn is checked against the policy's process.allow list, which
 is opt-in per policy file — see bpf_loader.py's --enforce-spawn help.
+
+If --policy is given, it's loaded and validated here, in the CLI itself,
+*before* the target script is launched -- not left for bpf_loader.py to
+discover once it starts as a subprocess. A missing/invalid policy file
+would otherwise only surface after the untrusted script was already
+running unsupervised (bpf_loader.py fails fast, but only after `run`
+already called Popen on the script). Validation warnings (e.g. a typo'd
+key) are printed but don't block the run.
 """
 import argparse
 import os
@@ -25,6 +33,9 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BPF_LOADER = os.path.join(REPO_ROOT, "controller", "bpf_loader.py")
+
+sys.path.insert(0, os.path.join(REPO_ROOT, "policy"))
+from policy_loader import load_policy, validate_policy  # noqa: E402
 
 
 def build_parser():
@@ -116,6 +127,16 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
+
+        if args.policy:
+            # Fails fast (via load_policy()'s own sys.exit) on a missing
+            # file or invalid JSON, before the target script is ever
+            # launched -- see module docstring. Validation warnings are
+            # advisory only and don't stop the run.
+            policy = load_policy(args.policy)
+            for warning in validate_policy(policy):
+                print(f"[KernelGuard] WARNING: policy {args.policy}: {warning}",
+                      file=sys.stderr)
 
         print(f"[KernelGuard] Launching target script: {args.script}")
         proc = subprocess.Popen([sys.executable, args.script])

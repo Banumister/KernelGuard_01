@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(
 ))
 from policy_loader import (
     load_policy, is_ip_allowed, is_path_allowed, is_delete_allowed,
-    is_spawn_allowed, should_enforce, reload_policy,
+    is_spawn_allowed, should_enforce, reload_policy, validate_policy,
 )
 
 BPF_SOURCE_FILE = os.path.join(
@@ -180,6 +180,8 @@ def handle_sighup(signum, frame):
         print(f"{RED}KernelGuard :: policy reload FAILED — {error}. "
               f"Keeping the previous policy in effect.{RESET}")
         return
+    for warning in validate_policy(new_policy):
+        print(f"{YELLOW}KernelGuard :: policy warning — {warning}{RESET}")
     POLICY = new_policy
     print(f"{GREEN}KernelGuard :: policy reloaded from {POLICY_PATH}.{RESET}")
 
@@ -304,6 +306,8 @@ if __name__ == "__main__":
 
     if args.policy:
         POLICY = load_policy(args.policy)
+        for warning in validate_policy(POLICY):
+            print(f"{YELLOW}KernelGuard :: policy warning — {warning}{RESET}")
         if hasattr(signal, "SIGHUP"):
             signal.signal(signal.SIGHUP, handle_sighup)
             print(f"{YELLOW}KernelGuard :: policy loaded from {POLICY_PATH}. "

@@ -289,6 +289,71 @@ def test_run_with_block_spawn_autoattaches_enforcing_tracer(tmp_path, monkeypatc
     assert "Attaching tracer (enforcing)" in captured.out
 
 
+def test_run_with_invalid_policy_path_exits_before_launching_script(tmp_path, monkeypatch, capsys):
+    """A bad --policy path must be caught in the CLI itself, before the
+    target script is ever launched -- previously this only surfaced once
+    bpf_loader.py tried to load it as a subprocess, by which point the
+    untrusted script was already running unsupervised. Popen must not be
+    called at all here, for either the script or a tracer."""
+    cli = _load_module("kernelguard_cli_badpolicy", "cli/kernelguard.py")
+
+    def fail_popen(*a, **kw):
+        raise AssertionError("subprocess.Popen must not be called when the "
+                              "policy file doesn't exist")
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fail_popen)
+
+    script = tmp_path / "noop.py"
+    script.write_text("pass\n")
+    missing_policy = tmp_path / "does_not_exist.json"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["kernelguard", "run", str(script), "--policy", str(missing_policy)],
+    )
+
+    try:
+        cli.main()
+        assert False, "expected SystemExit"
+    except SystemExit as exc:
+        # load_policy() calls sys.exit(<message string>) -- when caught
+        # like this (rather than propagating to the interpreter), the
+        # message lands in exc.code/exc.args, not in captured stderr,
+        # since Python only prints a str sys.exit() argument to stderr
+        # itself when the exception is left uncaught.
+        assert "not found" in str(exc.code).lower()
+
+
+def test_run_with_malformed_policy_warns_but_still_launches(tmp_path, monkeypatch, capsys):
+    """Unlike a missing/invalid-JSON policy file, a policy with a typo'd
+    key (still valid JSON) is only a warning -- validate_policy() is
+    diagnostic, not a gate, so the run must still proceed."""
+    cli = _load_module("kernelguard_cli_warnpolicy", "cli/kernelguard.py")
+
+    calls = []
+
+    def fake_popen(cmd, *a, **kw):
+        calls.append(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+
+    script = tmp_path / "noop.py"
+    script.write_text("pass\n")
+    bad_policy = tmp_path / "typo_policy.json"
+    bad_policy.write_text('{"netwrok": {"default": "deny"}}')
+    monkeypatch.setattr(
+        sys, "argv",
+        ["kernelguard", "run", str(script), "--policy", str(bad_policy)],
+    )
+
+    cli.main()
+
+    assert len(calls) == 2, "the run must still proceed despite the warning"
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "netwrok" in captured.err
+
+
 def test_run_with_policy_autoattaches_tracer_in_visibility_mode(tmp_path, monkeypatch, capsys):
     """`run --policy` alone should now auto-attach the tracer itself
     (single command, no second terminal needed) — but without either

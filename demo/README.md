@@ -8,9 +8,11 @@ tracer can't run.
 ## What's real vs. simulated
 
 - **Real:** it launches actual child processes (execve in Week 1,
-  fork/spawn in Week 5), writes and deletes actual files, and computes
-  every `ALLOWED`/`BLOCKED` tag by calling this repo's real
-  `policy/policy_loader.py` against the real `policy/policy_schema.json`.
+  fork/spawn in Week 5, one allowed and one blocked by comm name), writes
+  and deletes actual files, and computes every `ALLOWED`/`BLOCKED` tag by
+  calling this repo's real `policy/policy_loader.py` against the real
+  `policy/policy_schema.json` — including its `process` section, so the
+  fork step's rule check is genuine, not simulated.
 - **Simulated:** the kernel-side capture of `execve()` / `tcp_connect()`
   / `vfs_write()` / `unlinkat()` / process `fork`/`clone`. Loading the
   real eBPF program (`ebpf/execve_trace.c`) requires a Linux kernel with
@@ -18,10 +20,6 @@ tracer can't run.
   to compile against — not available on Windows or in most cloud
   sandboxes. The script prints a `[demo mode]` notice explaining this at
   runtime, so the output is honest about what it is.
-- Process-spawn events have no rule check at all yet (they're always
-  just reported, never `ALLOWED`/`BLOCKED`) — see the root README's
-  "Known limitations" section. The demo's Week 5 fork step reflects
-  that honestly rather than inventing a rule result for it.
 
 ## Running it
 

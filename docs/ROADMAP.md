@@ -236,6 +236,55 @@ With this, Week 5 closes out both open items from the original scope
 widening: a dedicated deletion policy and a process-spawn policy,
 alongside the `unlinkat()`/`fork` tracing added earlier this week.
 
+## Week 6 — Hardening: policy validation ✅ done
+
+The original roadmap (Weeks 1–5) is fully done — every planned syscall
+hook, its policy, and enforcement flag exist and are tested. This week
+is new scope: hardening what already exists, rather than adding another
+hook.
+
+- [x] `policy/policy_loader.py`'s new `validate_policy()` catches common
+      policy-authoring mistakes that previously failed completely
+      silently: an unrecognized top-level or section key (e.g. a typo
+      like `alow_write` instead of `allow_write`), a `default` value
+      that isn't `"allow"`/`"deny"`, a list-typed field (`allow_write`,
+      `allow_delete`, `process.allow`, `network.allow`) that isn't
+      actually a list, non-string entries in one of those lists, or a
+      malformed `network.allow` rule (missing `host`/`port`, or a
+      non-integer `port`). It's purely diagnostic — returns a list of
+      human-readable warning strings and never changes what
+      `is_ip_allowed()`/`is_path_allowed()`/etc. actually decide, the
+      same way `reload_policy()` never lets a bad edit crash a live
+      tracer. A policy with warnings still loads and runs exactly as
+      written; the point is surfacing "this probably isn't the policy
+      you meant to write" instead of only discovering it while debugging
+      unexpected `[BLOCKED]` tags.
+      `controller/bpf_loader.py` prints these warnings both at startup
+      (right after `load_policy()`) and after a successful `SIGHUP`
+      reload in `handle_sighup()`, so an operator sees them whichever way
+      the policy got loaded.
+      `cli/kernelguard.py run --policy` now also loads and validates the
+      policy file **before** launching the target script at all — this
+      closes a real gap in the previous behavior, where a missing or
+      invalid `--policy` path was only ever discovered once the
+      `bpf_loader.py` tracer subprocess tried to load it, by which point
+      `run` had already launched the untrusted script completely
+      unsupervised. Now a bad `--policy` argument fails the whole `run`
+      immediately, before anything is spawned; a merely-suspicious
+      (but valid) policy just prints warnings and the run proceeds.
+      Tests: `tests/test_basic.py` covers `validate_policy()` directly —
+      a well-formed policy produces no warnings, and each mistake
+      category (unknown top-level key, unknown section key, bad
+      `default`, non-list field, non-string list entries, malformed
+      network rule, non-dict policy) is exercised individually, plus a
+      test proving a policy with warnings still evaluates exactly as
+      written. `tests/test_cli_smoke.py` covers the CLI's new
+      preflight: a missing policy path exits before any `subprocess.Popen`
+      call, and a policy with a typo'd key still launches normally after
+      printing a warning. The `bpf_loader.py` wiring (startup print +
+      `handle_sighup()` print) was verified with the same mocked-`bcc`
+      runtime-simulation pattern used throughout this project.
+
 ## Environment note (applies to every week above)
 
 Everything here needs a Linux kernel with root access and a

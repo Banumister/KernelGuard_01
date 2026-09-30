@@ -103,6 +103,20 @@ own):
 sudo python3 controller/bpf_loader.py --pid 1234 --policy policy/policy_schema.json --enforce-spawn
 ```
 
+**Policy validation.** Loading a `--policy` file (in `bpf_loader.py`, on
+`SIGHUP` reload, and in `cli/kernelguard.py run`) also checks it for
+common authoring mistakes — an unrecognized section/key name (e.g. a
+typo like `alow_write`), a `default` that isn't `"allow"`/`"deny"`, a
+list field that isn't actually a list of strings, or a malformed
+`network.allow` rule — and prints a `WARNING` for each one it finds.
+These are diagnostics only: a policy with warnings still loads and
+enforces exactly as written (silently falling back to `default`, which
+is deny unless you set it to allow — never a security hole, just easy
+to misdiagnose without the warning). The CLI's `run --policy` also loads
+and validates the file *before* launching the target script, so a bad
+path or broken JSON fails immediately instead of only surfacing once the
+tracer subprocess tries to load it.
+
 Actively terminate a process unconditionally on its next monitored syscall:
 
 ```bash
@@ -171,7 +185,9 @@ pytest
   independently for filesystem writes (`allow_write`) and filesystem
   deletes (`allow_delete`) — a path can be writable without also being
   deletable, or vice versa — and, opt-in per policy file, for which
-  process names (`process.allow`) a script may spawn as children.
+  process names (`process.allow`) a script may spawn as children. Also
+  validates a loaded policy for authoring mistakes (typo'd keys, wrong
+  value types) and reports them as warnings without changing behavior.
 - **Security CLI** — `kernelguard run untrusted.py --block-network`,
   which auto-attaches the tracer for you.
 
@@ -209,7 +225,10 @@ detail in [docs/ROADMAP.md](docs/ROADMAP.md)):
   load or run on Windows, macOS, or most restricted cloud sandboxes —
   BCC needs to compile against a kernel-headers package matching
   `uname -r`. See `demo/README.md` for a way to demonstrate expected
-  output on machines without that environment.
+  output on machines without that environment, or
+  [docs/REAL_MACHINE_VALIDATION.md](docs/REAL_MACHINE_VALIDATION.md) for
+  exact steps to validate the real tracer end-to-end once you do have
+  access to a Linux box.
 
 ## License
 

@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy"))
 from policy_loader import (
     load_policy, is_ip_allowed, is_path_allowed, is_delete_allowed,
-    is_spawn_allowed, should_enforce, reload_policy,
+    is_spawn_allowed, should_enforce, reload_policy, validate_policy,
 )
 
 
@@ -193,3 +193,82 @@ def test_reload_policy_no_path_set_keeps_old_policy():
     new_policy, error = reload_policy(None, SAMPLE_POLICY)
     assert new_policy == SAMPLE_POLICY
     assert error is not None
+
+
+WELL_FORMED_POLICY = {
+    "policy_name": "example",
+    "network": {
+        "default": "deny",
+        "allow": [{"host": "127.0.0.1", "port": 443}],
+    },
+    "filesystem": {
+        "default": "deny",
+        "allow_write": ["/tmp/"],
+        "allow_delete": ["/tmp/"],
+    },
+    "process": {
+        "default": "deny",
+        "allow": ["python3"],
+    },
+}
+
+
+def test_validate_policy_returns_empty_for_well_formed_policy():
+    assert validate_policy(WELL_FORMED_POLICY) == []
+
+
+def test_validate_policy_flags_non_dict_policy():
+    warnings = validate_policy(["not", "a", "dict"])
+    assert len(warnings) == 1
+    assert "must be a JSON object" in warnings[0]
+
+
+def test_validate_policy_flags_unknown_top_level_key():
+    policy = {**WELL_FORMED_POLICY, "netwrok": {"default": "deny"}}
+    warnings = validate_policy(policy)
+    assert any("netwrok" in w for w in warnings)
+
+
+def test_validate_policy_flags_unknown_section_key():
+    policy = {"filesystem": {"default": "deny", "alow_write": ["/tmp/"]}}
+    warnings = validate_policy(policy)
+    assert any("alow_write" in w for w in warnings)
+
+
+def test_validate_policy_flags_bad_default_value():
+    policy = {"network": {"default": "allwo"}}
+    warnings = validate_policy(policy)
+    assert any('"network.default"' in w for w in warnings)
+
+
+def test_validate_policy_flags_non_list_allow_write():
+    policy = {"filesystem": {"default": "deny", "allow_write": "/tmp/"}}
+    warnings = validate_policy(policy)
+    assert any('"filesystem.allow_write" must be a list' in w for w in warnings)
+
+
+def test_validate_policy_flags_non_string_entries_in_allow_list():
+    policy = {"process": {"default": "deny", "allow": ["python3", 123]}}
+    warnings = validate_policy(policy)
+    assert any("entries must be strings" in w for w in warnings)
+
+
+def test_validate_policy_flags_malformed_network_rule():
+    policy = {"network": {"default": "deny", "allow": [{"host": "1.2.3.4"}]}}
+    warnings = validate_policy(policy)
+    assert any("network.allow[0]" in w for w in warnings)
+
+
+def test_validate_policy_flags_wrong_type_port():
+    policy = {"network": {"default": "deny",
+                           "allow": [{"host": "1.2.3.4", "port": "443"}]}}
+    warnings = validate_policy(policy)
+    assert any("network.allow[0].port" in w for w in warnings)
+
+
+def test_validate_policy_never_changes_enforcement_behavior():
+    # A policy with warnings still loads and evaluates exactly as written
+    # -- validate_policy() is purely diagnostic, never a gate.
+    policy = {"filesystem": {"default": "deny", "alow_write": ["/tmp/"]}}
+    assert validate_policy(policy) != []
+    assert is_path_allowed(policy, "/tmp/output.txt") is False

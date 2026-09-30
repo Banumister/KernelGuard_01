@@ -84,3 +84,9 @@ flake8 .
   [demo/README.md](../demo/README.md) for a way to show KernelGuard's
   expected behavior (real policy logic, simulated kernel-capture timing)
   on any machine, including Windows.
+
+## Once you do have a real Linux box
+
+See [docs/REAL_MACHINE_VALIDATION.md](REAL_MACHINE_VALIDATION.md) for a
+concrete, step-by-step checklist that exercises every hook and policy
+feature against the real eBPF tracer, with expected output for each one.
